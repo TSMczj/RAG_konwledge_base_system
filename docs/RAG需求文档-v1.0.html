@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG 本地知识库问答系统 · 需求文档 v1.0</title>
+<style>
+  :root{
+    --bg:#f6f7f9;
+    --panel:#ffffff;
+    --text:#1f2329;
+    --text-2:#5b6470;
+    --text-3:#8a929c;
+    --line:#e5e8ec;
+    --line-2:#eef1f4;
+    --brand:#2563eb;
+    --brand-soft:#eff4ff;
+    --must:#d92d20;
+    --should:#b54708;
+    --could:#175cd3;
+    --won:#475467;
+    --ok:#067647;
+    --warn-bg:#fffaeb;
+    --warn-line:#fedf89;
+    --warn-text:#7a2e0e;
+    --note-bg:#eff4ff;
+    --note-line:#b2ccff;
+    --code-bg:#f2f4f7;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+    font-size:15px;
+    line-height:1.75;
+    -webkit-font-smoothing:antialiased;
+  }
+  .layout{display:flex;gap:0;max-width:1400px;margin:0 auto;align-items:flex-start}
+  /* ---- TOC ---- */
+  nav.toc{
+    position:sticky;top:0;flex:0 0 250px;height:100vh;overflow-y:auto;
+    padding:28px 18px;border-right:1px solid var(--line);
+    background:var(--panel);
+  }
+  nav.toc .toc-title{font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:var(--text-3);font-weight:700;margin-bottom:14px}
+  nav.toc a{display:block;color:var(--text-2);text-decoration:none;font-size:13.5px;padding:5px 10px;border-radius:6px;border-left:2px solid transparent}
+  nav.toc a:hover{background:var(--brand-soft);color:var(--brand)}
+  nav.toc a.sub{padding-left:22px;font-size:13px;color:var(--text-3)}
+  /* ---- content ---- */
+  main{flex:1 1 auto;min-width:0;padding:44px 56px 120px}
+  header.doc-head{border-bottom:1px solid var(--line);padding-bottom:26px;margin-bottom:34px}
+  header.doc-head h1{font-size:30px;line-height:1.3;margin:0 0 6px;letter-spacing:-.01em}
+  header.doc-head .sub{color:var(--text-2);font-size:15px;margin-bottom:20px}
+  .metagrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .metagrid div{background:var(--panel);padding:12px 16px}
+  .metagrid .k{font-size:11.5px;color:var(--text-3);letter-spacing:.06em;text-transform:uppercase;font-weight:700}
+  .metagrid .v{font-size:14px;margin-top:3px;font-weight:600}
+  .goal{
+    margin:24px 0 0;padding:16px 20px;background:var(--brand-soft);
+    border:1px solid #cddcff;border-radius:10px;font-size:15px;color:#173c88;
+  }
+  .goal b{color:#0b2e78}
+  h2{font-size:22px;margin:52px 0 16px;padding-bottom:9px;border-bottom:1px solid var(--line);letter-spacing:-.01em}
+  h2 .num{color:var(--brand);font-weight:800;margin-right:8px}
+  h3{font-size:17px;margin:32px 0 10px;color:var(--text)}
+  h4{font-size:14.5px;margin:22px 0 8px;color:var(--text-2)}
+  p{margin:10px 0}
+  ul,ol{margin:10px 0;padding-left:24px}
+  li{margin:5px 0}
+  code{background:var(--code-bg);padding:2px 6px;border-radius:5px;font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-size:13px;color:#b42318}
+  strong{font-weight:700}
+  a{color:var(--brand)}
+  /* tables */
+  table{width:100%;border-collapse:collapse;margin:16px 0;font-size:14px;background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  th{background:#fafbfc;text-align:left;font-weight:700;color:var(--text-2);font-size:12.5px;letter-spacing:.03em;padding:11px 14px;border-bottom:1px solid var(--line)}
+  td{padding:11px 14px;border-bottom:1px solid var(--line-2);vertical-align:top}
+  tr:last-child td{border-bottom:none}
+  td.center,th.center{text-align:center}
+  /* badges */
+  .b{display:inline-block;font-size:11px;font-weight:800;padding:1px 7px;border-radius:5px;letter-spacing:.04em}
+  .b-m{background:#fee4e2;color:var(--must)}
+  .b-s{background:#fef0c7;color:var(--should)}
+  .b-c{background:#d1e9ff;color:var(--could)}
+  .b-w{background:#eaecf0;color:var(--won)}
+  /* callouts */
+  .callout{margin:16px 0;padding:14px 18px;border-radius:10px;border:1px solid;font-size:14px}
+  .callout .h{font-weight:800;font-size:13px;letter-spacing:.04em;margin-bottom:5px}
+  .callout.warn{background:var(--warn-bg);border-color:var(--warn-line);color:var(--warn-text)}
+  .callout.note{background:var(--note-bg);border-color:var(--note-line);color:#173c88}
+  .callout code{background:rgba(255,255,255,.7);color:inherit}
+  /* pre */
+  pre{background:#0f172a;color:#e2e8f0;padding:18px 20px;border-radius:10px;overflow-x:auto;font-size:13px;line-height:1.65;font-family:"SFMono-Regular",Consolas,monospace}
+  pre .c{color:#7c8aa5}
+  pre .k{color:#93c5fd}
+  /* checklist */
+  ul.check{list-style:none;padding-left:0}
+  ul.check li{position:relative;padding-left:30px;margin:7px 0}
+  ul.check li::before{
+    content:"";position:absolute;left:0;top:4px;width:16px;height:16px;
+    border:1.5px solid #c3c9d2;border-radius:4px;background:#fff;
+  }
+  /* flow / ascii */
+  .flow{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:18px;overflow-x:auto;font-family:"SFMono-Regular",Consolas,monospace;font-size:12.5px;line-height:1.9;color:var(--text-2);white-space:pre}
+  /* section meta */
+  .sec-note{color:var(--text-3);font-size:13px;margin:-6px 0 16px}
+  hr.soft{border:none;border-top:1px solid var(--line);margin:44px 0}
+  footer{margin-top:60px;padding-top:22px;border-top:1px solid var(--line);color:var(--text-3);font-size:13px;text-align:center}
+  @media (max-width:1080px){
+    nav.toc{display:none}
+    main{padding:28px 20px 80px}
+  }
+  @media print{
+    nav.toc{display:none}
+    body{background:#fff;font-size:12px}
+    main{padding:0}
+    h2{page-break-after:avoid}
+    table,pre,.callout{page-break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc">
+  <div class="toc-title">目录</div>
+  <a href="#s0">文档使用说明</a>
+  <a href="#s1">1. 项目概述</a>
+  <a href="#s1-2" class="sub">1.2 核心目标</a>
+  <a href="#s1-3" class="sub">1.3 非目标</a>
+  <a href="#s2">2. 用户与场景</a>
+  <a href="#s3">3. 功能需求 FR</a>
+  <a href="#s4">4. 非功能需求 NFR</a>
+  <a href="#s5">5. 技术方案</a>
+  <a href="#s6">6. 配置与数据</a>
+  <a href="#s7">7. 验收与测试</a>
+  <a href="#s8">8. 风险与对策</a>
+  <a href="#s9">9. 里程碑</a>
+  <a href="#s10">10. 待决事项</a>
+  <a href="#s11">11. 决策记录</a>
+  <a href="#sa">附录 A · V2 演进</a>
+</nav>
+
+<main>
+<header class="doc-head">
+  <h1>RAG 本地知识库问答系统 · 需求文档</h1>
+  <div class="sub">基于 LangChain + FastAPI 的本地私有知识问答工具</div>
+  <div class="metagrid">
+    <div><div class="k">文档版本</div><div class="v">v1.0</div></div>
+    <div><div class="k">创建日期</div><div class="v">2026-10-13</div></div>
+    <div><div class="k">文档状态</div><div class="v">评审中 · Q1–Q5 已结论</div></div>
+    <div><div class="k">项目代号</div><div class="v">local-rag</div></div>
+    <div><div class="k">项目根目录</div><div class="v">D:\个人知识库rag系统</div></div>
+    <div><div class="k">目标读者</div><div class="v">开发者本人（单用户）</div></div>
+    <div><div class="k">部署形态</div><div class="v">本地运行 · 不上线</div></div>
+    <div><div class="k">环境隔离</div><div class="v">venv（不上 Docker）</div></div>
+  </div>
+  <div class="goal">
+    <b>一句话目标：</b>在本地用 LangChain 搭一套 RAG 问答系统——把 PDF / Word / TXT 导入知识库，提问时用向量检索召回原文片段，交给大模型生成<b>带出处</b>的回答，并通过浏览器页面使用。
+  </div>
+</header>
+
+<section id="s0">
+<h2><span class="num">0</span>文档使用说明</h2>
+<ul>
+  <li>需求用 <b>FR-xx</b>（功能）与 <b>NFR-xx</b>（非功能）编号，便于逐条对账。</li>
+  <li>每条需求都带<b>验收标准</b>，做到"可量化、可验证"。</li>
+  <li>优先级采用 MoSCoW：<span class="b b-m">M 必须有</span> <span class="b b-s">S 应该有</span> <span class="b b-c">C 可以有</span> <span class="b b-w">W V1不做</span></li>
+  <li>文中所有参数默认值均标注为「可调」，并给出调整方向。</li>
+</ul>
+</section>
+
+<section id="s1">
+<h2><span class="num">1</span>项目概述</h2>
+<h3>1.1 背景</h3>
+<p>日常积累了大量论文、教材与笔记（PDF / Word / TXT）。目前靠人工翻阅与全文搜索定位信息，效率低，且无法回答"跨文档聚合"类问题（如"这几篇论文分别用了什么损失函数"）。需要一个私有、可离线留存知识、按需调用云端模型的问答工具。</p>
+
+<h3 id="s1-2">1.2 核心目标（可量化）</h3>
+<table>
+<thead><tr><th style="width:70px">编号</th><th>目标</th><th>量化验收指标</th></tr></thead>
+<tbody>
+<tr><td><b>G1</b></td><td>文档可顺利导入并检索</td><td>支持 <code>.pdf</code>/<code>.docx</code>/<code>.txt</code>；随机 10 份文档解析成功率 <b>≥ 95%</b></td></tr>
+<tr><td><b>G2</b></td><td>检索结果准确</td><td>自建 20 条测试问答，<b>Top-5 召回命中率 ≥ 85%</b></td></tr>
+<tr><td><b>G3</b></td><td>回答可溯源</td><td><b>100%</b> 回答附带来源（文件名 + 页码）；抽查 10 条可溯源率 <b>100%</b></td></tr>
+<tr><td><b>G4</b></td><td>响应速度可接受</td><td>检索 <b>P95 &lt; 1s</b>；首字 <b>&lt; 3s</b>；单轮完整回答 <b>&lt; 15s</b></td></tr>
+<tr><td><b>G5</b></td><td>工程可复现</td><td><code>pip install</code> + 一条命令启动；核心链路有自动化测试</td></tr>
+</tbody>
+</table>
+
+<h3 id="s1-3">1.3 非目标（V1 明确不做）</h3>
+<table>
+<thead><tr><th style="width:260px">项目</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>用户系统 / 登录 / 权限</td><td>单用户本地使用，不做鉴权</td></tr>
+<tr><td>公网部署 / 多租户 / 高可用</td><td>仅本机 <code>127.0.0.1</code> 访问</td></tr>
+<tr><td>混合检索（BM25）+ 重排序</td><td>列入 <b>V2 预留</b>，V1 不做</td></tr>
+<tr><td>图片内容语义理解</td><td>图注文本会入库，但不做图像语义问答</td></tr>
+<tr><td>扫描件 OCR</td><td>V1 不处理纯扫描 PDF（见风险 R1）</td></tr>
+<tr><td>文档在线编辑 / 协作</td><td>知识库只读+增删，不做编辑</td></tr>
+<tr><td>模型微调 / 训练</td><td>仅调用现成 API</td></tr>
+<tr><td>高并发压测</td><td>单用户，不做并发优化</td></tr>
+</tbody>
+</table>
+
+<h3>1.4 术语表</h3>
+<table>
+<thead><tr><th style="width:150px">术语</th><th>含义</th></tr></thead>
+<tbody>
+<tr><td><b>RAG</b></td><td>检索增强生成。先检索相关文档片段，再让大模型基于片段作答</td></tr>
+<tr><td><b>Chunk</b></td><td>文档切分后的最小检索单元（文本块）</td></tr>
+<tr><td><b>Embedding</b></td><td>把文本映射成高维向量，用于计算语义相似度</td></tr>
+<tr><td><b>Top-K</b></td><td>检索返回的相似块数量</td></tr>
+<tr><td><b>向量库</b></td><td>存储向量并支持相似度检索的数据库，本项目用 Chroma</td></tr>
+<tr><td><b>溯源 / 引用</b></td><td>回答中标注信息来自哪个文件的哪一页</td></tr>
+<tr><td><b>查询改写</b></td><td>多轮对话中把"那它呢"这类指代提问补全为独立查询</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="s2">
+<h2><span class="num">2</span>用户与场景</h2>
+<h3>2.1 目标用户</h3>
+<p>单用户（本人），本地使用，具备 Python 基础，能自行配置 API Key。</p>
+
+<h3>2.2 用户故事</h3>
+<table>
+<thead><tr><th style="width:90px">编号</th><th>用户故事</th><th style="width:80px" class="center">优先级</th></tr></thead>
+<tbody>
+<tr><td><b>US-1</b></td><td>我把一批 PDF 放进指定目录或上传，系统自动解析入库，无需手工整理</td><td class="center"><span class="b b-m">M</span></td></tr>
+<tr><td><b>US-2</b></td><td>我提问"这篇论文用了什么损失函数"，系统给出答案并标注来自哪个文件第几页</td><td class="center"><span class="b b-m">M</span></td></tr>
+<tr><td><b>US-3</b></td><td>我追问"那它的消融实验呢"，系统结合上下文继续回答，不需重复主语</td><td class="center"><span class="b b-s">S</span></td></tr>
+<tr><td><b>US-4</b></td><td>我发现某篇文档解析有误，可单独删除并重新导入，不影响其他文档</td><td class="center"><span class="b b-s">S</span></td></tr>
+<tr><td><b>US-5</b></td><td>我想知道知识库里现在有哪些文档，能一眼看到列表</td><td class="center"><span class="b b-s">S</span></td></tr>
+<tr><td><b>US-6</b></td><td>我暂时不想花钱，希望导入文档时能看到大概花了多少 token / 成本</td><td class="center"><span class="b b-c">C</span></td></tr>
+</tbody>
+</table>
+
+<h3>2.3 核心使用流程</h3>
+<div class="flow">导入侧：  文档 → 解析(PDF/Word/TXT) → 分块 Chunk → Qwen 向量化 → Chroma 向量库
+                                                                          │
+问答侧：  用户提问 → 问题向量化 → 相似度检索 Top-K ────────────────────────┘
+                 → 组装提示词 → DeepSeek 生成 → 回答 + 来源引用 → 回到用户</div>
+</section>
+
+<section id="s3">
+<h2><span class="num">3</span>功能需求（Functional Requirements）</h2>
+
+<h3>3.1 总览</h3>
+<table>
+<thead><tr><th style="width:80px">编号</th><th style="width:130px">模块</th><th style="width:80px" class="center">优先级</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>FR-01</td><td>文档摄入</td><td class="center"><span class="b b-m">M</span></td><td>上传或目录批量导入 pdf/docx/txt</td></tr>
+<tr><td>FR-02</td><td>文档解析</td><td class="center"><span class="b b-m">M</span></td><td>抽取正文，保留表格结构，记录页码</td></tr>
+<tr><td>FR-03</td><td>文本分块</td><td class="center"><span class="b b-m">M</span></td><td>按语义边界切块，带重叠</td></tr>
+<tr><td>FR-04</td><td>向量化与入库</td><td class="center"><span class="b b-m">M</span></td><td>Qwen 嵌入 → Chroma 持久化，幂等去重</td></tr>
+<tr><td>FR-05</td><td>索引管理</td><td class="center"><span class="b b-s">S</span></td><td>列表 / 按文件删除 / 全量重建</td></tr>
+<tr><td>FR-06</td><td>相似度检索</td><td class="center"><span class="b b-m">M</span></td><td>问题向量化 → Top-K 召回</td></tr>
+<tr><td>FR-07</td><td>提示词组装</td><td class="center"><span class="b b-m">M</span></td><td>约束+上下文+问题的模板化拼装</td></tr>
+<tr><td>FR-08</td><td>答案生成</td><td class="center"><span class="b b-m">M</span></td><td>DeepSeek 流式生成</td></tr>
+<tr><td>FR-09</td><td>来源引用</td><td class="center"><span class="b b-m">M</span></td><td>回答标注 [n]，可查看原文块</td></tr>
+<tr><td>FR-10</td><td>多轮对话</td><td class="center"><span class="b b-s">S</span></td><td>历史管理 + 查询改写</td></tr>
+<tr><td>FR-11</td><td>Web 界面</td><td class="center"><span class="b b-m">M</span></td><td>聊天页 + 文档管理页</td></tr>
+<tr><td>FR-12</td><td>HTTP API</td><td class="center"><span class="b b-m">M</span></td><td>REST 接口 + Swagger 文档</td></tr>
+</tbody>
+</table>
+
+<h3>FR-01 文档摄入 <span class="b b-m">M</span></h3>
+<p><b>描述</b>：支持两种导入方式——① Web 页面文件上传（单/多选）；② 指定本地目录扫描导入。</p>
+<ul>
+  <li>支持扩展名：<code>.pdf</code>、<code>.docx</code>、<code>.txt</code>（<code>.md</code> 可选，S）。</li>
+  <li>单文件大小上限 <b>50 MB</b>（可调）。上传文件落盘到 <code>data/uploads/</code>，保留原始文件。</li>
+</ul>
+<h4>验收标准</h4>
+<ul class="check">
+  <li>上传一个 50MB 以内 PDF，能成功进入解析流程并给出状态反馈。</li>
+  <li>目录导入时，非目标扩展名文件被跳过且不报错。</li>
+</ul>
+
+<h3>FR-02 文档解析 <span class="b b-m">M</span></h3>
+<p><b>描述</b>：把文档抽取为纯文本，同时尽量保留结构与页码信息。</p>
+<table>
+<thead><tr><th style="width:180px">类型</th><th style="width:220px">首选方案</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td>PDF（文本型）</td><td><code>PyMuPDF</code> / <code>pypdf</code></td><td>按页抽取文本，<b>记录页码</b></td></tr>
+<tr><td>PDF（含表格）</td><td><code>pdfplumber</code> 抽表 → Markdown 表格</td><td>表格尽量整体保留，避免被切碎</td></tr>
+<tr><td>Word</td><td><code>python-docx</code> + <code>unstructured</code></td><td>抽取段落、标题层级、表格</td></tr>
+<tr><td>TXT</td><td>直接读取</td><td>需编码探测（<code>charset-normalizer</code>），默认 UTF-8</td></tr>
+</tbody>
+</table>
+<div class="callout warn">
+  <div class="h">已知限制</div>
+  数学公式：尽力保留 LaTeX 原文；<b>若 PDF 中公式为图片形式，V1 不做公式识别</b>，会丢失或转为空。图注/标题作为普通文本入库。解析单文件失败<b>不得中断整批导入</b>，需记录失败清单。
+</div>
+<h4>验收标准</h4>
+<ul class="check">
+  <li>随机抽 10 份文档，人工核对抽取文本，关键段落无成段缺失。</li>
+  <li>解析结果中每条文本块都能回溯到 <code>(文件名, 页码)</code>。</li>
+  <li>引入 1 个损坏文件，其余文件仍正常入库。</li>
+</ul>
+
+<h3>FR-03 文本分块 <span class="b b-m">M</span></h3>
+<p>使用 <code>RecursiveCharacterTextSplitter</code>（LangChain）按语义边界切块。</p>
+<table>
+<thead><tr><th style="width:200px">参数</th><th style="width:190px">默认值</th><th>调整方向</th></tr></thead>
+<tbody>
+<tr><td><code>chunk_size</code></td><td><b>500 字符</b></td><td>语义碎 → 调大（600–800）；检索不准 → 调小</td></tr>
+<tr><td><code>chunk_overlap</code></td><td><b>80 字符</b>（约 16%）</td><td>边界丢信息 → 调大</td></tr>
+<tr><td>分隔符优先级</td><td><code>\n\n</code> → <code>\n</code> → <code>。</code> → <code>；</code> → <code>！</code> → <code>？</code> → <code>，</code></td><td>面向中文的降级切分</td></tr>
+<tr><td>表格块</td><td><b>不拆分</b>，整表成块</td><td>—</td></tr>
+</tbody>
+</table>
+<p>每个 chunk 必须携带 <code>source_file</code>、<code>page</code>、<code>chunk_index</code>。</p>
+<h4>验收标准</h4>
+<ul class="check">
+  <li>抽样 20 个 chunk，句子未被从中间截断（或由 overlap 覆盖）。</li>
+  <li>表格所在 chunk 未被切散。</li>
+</ul>
+
+<h3>FR-04 向量化与入库 <span class="b b-m">M</span></h3>
+<table>
+<thead><tr><th style="width:170px">项目</th><th>值</th></tr></thead>
+<tbody>
+<tr><td>嵌入模型</td><td><code>text-embedding-v4</code>（阿里云百炼 / DashScope）</td></tr>
+<tr><td>向量维度</td><td><b>1024</b>（默认；可选 768/512 降本）</td></tr>
+<tr><td>单条上限</td><td>8,192 token</td></tr>
+<tr><td>单次批量</td><td><b>≤ 10 条</b>（API 硬限制，需分批）</td></tr>
+<tr><td>向量库</td><td>Chroma，持久化目录 <code>data/chroma/</code></td></tr>
+<tr><td>相似度度量</td><td><b>cosine</b></td></tr>
+<tr><td>幂等策略</td><td>以文件内容 SHA-256 判重，已入库重复导入时跳过</td></tr>
+</tbody>
+</table>
+<div class="callout warn">
+  <div class="h">重要约束</div>
+  同一模型若中途更改维度，之前所有向量<b>无法与新向量比较</b>，必须整库重建。V1 固定 1024 维，不得随意改动。
+</div>
+<h4>验收标准</h4>
+<ul class="check">
+  <li>入库 N 个 chunk 后，<code>collection.count() == N</code>。</li>
+  <li>同一文件二次导入，库内数量不增加（幂等生效）。</li>
+</ul>
+
+<h3>FR-05 索引管理 <span class="b b-s">S</span></h3>
+<ul>
+  <li>列出已入库文档（文件名、块数、导入时间）。</li>
+  <li>按文件删除：删除该文件对应的<b>全部</b> chunk 向量。</li>
+  <li>全量重建索引（清空后重新解析入库）。</li>
+</ul>
+<h4>验收标准</h4>
+<ul class="check">
+  <li>删除某文件后，检索结果中不再出现该文件任何片段。</li>
+  <li>重建后 <code>count()</code> 与重建前一致（相同输入下）。</li>
+</ul>
+
+<h3>FR-06 相似度检索 <span class="b b-m">M</span></h3>
+<ul>
+  <li>问题侧向量化使用 <code>text_type="query"</code>（若模型支持查询/文档区分优化）。</li>
+  <li>默认 <b>K = 5</b>（可调 3–10）。</li>
+  <li>支持按元数据过滤（限定某文件/类型）—— 优先级 C。</li>
+  <li>检索结果包含：<code>chunk 文本</code>、<code>相似度分数</code>、<code>文件名</code>、<code>页码</code>。</li>
+</ul>
+<h4>验收标准</h4>
+<ul class="check">
+  <li>返回条数 ≤ K，且按相似度降序排列。</li>
+  <li>检索 P95 &lt; 1s（不含 LLM 生成）。</li>
+</ul>
+
+<h3>FR-07 提示词组装 <span class="b b-m">M</span></h3>
+<ol>
+  <li><b>System</b>：角色设定 + 硬约束——只依据上下文回答；上下文不足时明确回复"知识库中没有相关信息"，<b>禁止编造</b>；必须标注引用编号 <code>[n]</code>。</li>
+  <li><b>Context</b>：拼接 Top-K 块，每块前加编号 <code>[1] [2] …</code>，并附来源标注。</li>
+  <li><b>Question</b>：用户问题（多轮场景为改写后的独立问题）。</li>
+</ol>
+<p><b>Token 控制</b>：上下文总量上限 <b>6,000 token</b>（可调）；超出时按相似度取 Top，丢弃尾部。</p>
+<h4>验收标准</h4>
+<ul class="check">
+  <li>提示词中每个上下文块都有唯一编号，且能与来源元数据一一对应。</li>
+  <li>上下文超限时自动截断且不报错。</li>
+</ul>
+
+<h3>FR-08 答案生成 <span class="b b-m">M</span></h3>
+<table>
+<thead><tr><th style="width:170px">项目</th><th>值</th></tr></thead>
+<tbody>
+<tr><td>模型</td><td><code>deepseek-v4-flash</code>（经 OpenAI 兼容接口）</td></tr>
+<tr><td>Base URL</td><td><code>https://api.deepseek.com</code></td></tr>
+<tr><td>上下文窗口</td><td>1M token（远超本项目需要）</td></tr>
+<tr><td><code>temperature</code></td><td><b>0.2</b>（可调 0.0–0.5，越低越稳）</td></tr>
+<tr><td>输出方式</td><td>流式（SSE / chunked）</td></tr>
+<tr><td>无答案兜底</td><td>上下文不相关时回复固定话术，不瞎猜</td></tr>
+</tbody>
+</table>
+<div class="callout warn">
+  <div class="h">注意</div>
+  <code>deepseek-chat</code> / <code>deepseek-reasoner</code> 两个旧模型名已于 <b>2026-07-24 弃用</b>，请直接使用 <code>deepseek-v4-flash</code>（更强推理可用 <code>deepseek-v4-pro</code>）。
+</div>
+<h4>验收标准</h4>
+<ul class="check">
+  <li>给定测试问题，答案为中文、条理清晰。</li>
+  <li>上下文完全无关时，明确回复"没有相关信息"而非编造。</li>
+  <li>前端可见流式打字效果。</li>
+</ul>
+
+<h3>FR-09 来源引用 / 溯源 <span class="b b-m">M</span></h3>
+<ul>
+  <li>回答正文内联标注 <code>[1]</code>、<code>[2]</code>。</li>
+  <li>回答下方列出引用列表：<code>[n] 文件名 · 第 x 页</code>。</li>
+  <li>前端可展开查看该片段<b>原文</b>。</li>
+</ul>
+<h4>验收标准</h4>
+<ul class="check">
+  <li>抽查 10 条回答，每条都能追溯到真实存在且<b>语义相关</b>的原文块（可溯源率 100%）。</li>
+  <li>引用列表中的文件名、页码与库内元数据一致。</li>
+</ul>
+
+<h3>FR-10 多轮对话 <span class="b b-s">S</span></h3>
+<ul>
+  <li>维护会话历史，默认保留最近 <b>5 轮</b>（可调）。</li>
+  <li><b>查询改写</b>：把含指代/省略的追问（如"那它的消融实验呢"）结合历史改写为独立查询后再检索 —— 此项是关键，否则追问检索必然失败。</li>
+  <li>历史持久化：SQLite（<code>data/chat.db</code>）或内存（重启即清）—— 优先级 C。</li>
+</ul>
+<h4>验收标准</h4>
+<ul class="check">
+  <li>连续 3 轮追问，第 3 轮能正确复用前文主语并检索到相关片段。</li>
+  <li>历史超过上限时自动丢弃最旧轮次，不报错。</li>
+</ul>
+
+<h3>FR-11 Web 界面 <span class="b b-m">M</span></h3>
+<p>FastAPI + Jinja2 模板 + 原生 JS（可选 HTMX），单进程部署。</p>
+<table>
+<thead><tr><th style="width:130px">页面</th><th style="width:130px">路径</th><th>内容</th></tr></thead>
+<tbody>
+<tr><td>聊天页</td><td><code>/</code></td><td>提问输入框、流式回答区、引用展示区、清空会话</td></tr>
+<tr><td>文档管理页</td><td><code>/documents</code></td><td>上传控件、已入库文档列表、删除按钮、重建索引</td></tr>
+</tbody>
+</table>
+<h4>验收标准</h4>
+<ul class="check">
+  <li>浏览器打开 <code>http://127.0.0.1:8000</code> 可用。</li>
+  <li>聊天页可完成"提问 → 流式回答 → 看到引用"完整闭环。</li>
+</ul>
+
+<h3>FR-12 HTTP API <span class="b b-m">M</span></h3>
+<table>
+<thead><tr><th style="width:90px">方法</th><th style="width:280px">路径</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>POST</code></td><td><code>/api/chat</code></td><td>提问，返回流式回答</td></tr>
+<tr><td><code>POST</code></td><td><code>/api/documents/upload</code></td><td>上传文档</td></tr>
+<tr><td><code>GET</code></td><td><code>/api/documents</code></td><td>文档列表</td></tr>
+<tr><td><code>DELETE</code></td><td><code>/api/documents/{id}</code></td><td>删除文档</td></tr>
+<tr><td><code>POST</code></td><td><code>/api/index/rebuild</code></td><td>重建索引</td></tr>
+<tr><td><code>GET</code></td><td><code>/api/health</code></td><td>健康检查</td></tr>
+</tbody>
+</table>
+<h4>验收标准</h4>
+<ul class="check"><li><code>/docs</code> 可打开，所有接口可在 Swagger 中调通。</li></ul>
+</section>
+
+<section id="s4">
+<h2><span class="num">4</span>非功能需求（Non-Functional）</h2>
+
+<h3>NFR-1 性能</h3>
+<table>
+<thead><tr><th style="width:280px">指标</th><th style="width:180px">目标值</th><th>测量方式</th></tr></thead>
+<tbody>
+<tr><td>检索耗时（含 query 向量化）</td><td>P95 <b>&lt; 1s</b></td><td>服务端日志打点</td></tr>
+<tr><td>首字延迟（TTFT）</td><td><b>&lt; 3s</b></td><td>前端计时</td></tr>
+<tr><td>单轮完整回答</td><td><b>&lt; 15s</b></td><td>前端计时</td></tr>
+<tr><td>单文件索引（≤50 页 PDF）</td><td><b>&lt; 60s</b></td><td>服务端日志打点</td></tr>
+<tr><td>内存占用（空闲）</td><td><b>&lt; 1 GB</b></td><td>任务管理器</td></tr>
+</tbody>
+</table>
+<p style="color:var(--text-3);font-size:13px">数值基于本地 Chroma + 云端 API。若到云端网络延迟高，可放宽。</p>
+
+<h3>NFR-2 可靠性</h3>
+<ul>
+  <li>所有云端 API 调用需有<b>超时</b>（连接 10s / 读取 60s）与<b>重试</b>（最多 3 次，指数退避）。</li>
+  <li>单文件解析失败不阻断整批导入，失败项进入错误清单并可重试。</li>
+  <li>向量库写入失败时，保证不产生"半入库"脏数据（按文件原子提交）。</li>
+</ul>
+
+<h3>NFR-3 可维护性</h3>
+<ul>
+  <li>分层架构：<code>api</code>（路由）/ <code>core</code>（业务）/ <code>models</code>（数据结构）分离。</li>
+  <li>全量类型注解，关键函数有 docstring。</li>
+  <li>统一日志：<code>loguru</code>，输出到控制台 + <code>logs/</code>。</li>
+  <li>配置外置：所有可调项进 <code>.env</code>，代码不硬编码。</li>
+</ul>
+
+<h3>NFR-4 安全与隐私</h3>
+<ul>
+  <li>API Key 存于<b>系统环境变量</b>（<code>DEEPSEEK_API_KEY</code> / <code>DASHSCOPE_API_KEY</code>），代码用 <code>os.getenv()</code> 读取；<b>禁止写入代码、<code>.env</code> 或提交仓库</b>。</li>
+  <li><code>.gitignore</code> 必须排除 <code>.env</code>、<code>data/</code>、<code>logs/</code>。</li>
+  <li>服务仅绑定 <code>127.0.0.1</code>，不监听 <code>0.0.0.0</code>。</li>
+  <li>数据流向：文档原文留在本机；仅 <b>chunk 文本片段</b>会发送至 Qwen（嵌入）与 DeepSeek（生成）—— 需使用者知情。</li>
+</ul>
+
+<h3>NFR-5 成本（估算）</h3>
+<table>
+<thead><tr><th style="width:200px">环节</th><th>假设</th><th style="width:230px">成本</th></tr></thead>
+<tbody>
+<tr><td>首次建库（嵌入）</td><td>100 文档 × 20 块 × ~400 token ≈ 80 万 token</td><td><code>text-embedding-v4</code> $0.07/百万 → <b>≈ $0.06</b></td></tr>
+<tr><td>单次问答（生成）</td><td>输入 ~3,000 + 输出 ~400 token</td><td><code>deepseek-v4-flash</code> → <b>≈ $0.0005/次</b></td></tr>
+<tr><td>1,000 次问答</td><td>—</td><td><b>≈ $0.5</b></td></tr>
+</tbody>
+</table>
+<div class="callout note"><div class="h">结论</div>小规模自用成本极低，<b>瓶颈不在钱，在解析质量与检索准确率</b>。</div>
+
+<h3>NFR-6 可复现性</h3>
+<ul>
+  <li>使用 <b>Python venv</b> 隔离依赖（V1 不上 Docker，理由见 §11）。</li>
+  <li><code>requirements.txt</code> 锁定版本。</li>
+  <li><code>.env.example</code> 提供配置模板。</li>
+  <li><code>README.md</code> 含：环境要求、安装、配置、启动、常见问题。</li>
+  <li>提供一键启动脚本（<code>start.ps1</code> / <code>start.sh</code>）。</li>
+</ul>
+</section>
+
+<section id="s5">
+<h2><span class="num">5</span>技术方案</h2>
+
+<h3>5.1 架构分层</h3>
+<div class="flow">┌─────────────── 前端 ───────────────┐
+│   FastAPI + Jinja2 页面            │
+└────────────────┬───────────────────┘
+                 │
+┌────────────────▼───────────────────┐
+│        接入层  REST API /api/*      │
+└────────────────┬───────────────────┘
+                 │
+┌────────────────▼───────────────────┐         ┌──────────────┐
+│  业务核心层                         │────────▶│ Qwen 嵌入    │
+│  loader → splitter → embedder      │         └──────────────┘
+│  retriever → prompt → llm          │────────▶┌──────────────┐
+└────────────────┬───────────────────┘         │ DeepSeek 生成│
+                 │                              └──────────────┘
+┌────────────────▼───────────────────┐
+│  存储：Chroma 向量库 / SQLite / 文件 │
+└────────────────────────────────────┘</div>
+
+<h3>5.2 技术栈</h3>
+<table>
+<thead><tr><th style="width:110px">层</th><th style="width:250px">选型</th><th>理由</th><th style="width:120px">备选</th></tr></thead>
+<tbody>
+<tr><td>编排框架</td><td><b>LangChain</b></td><td>你指定；生态成熟，Loader/Splitter/Retriever 开箱即用</td><td>LlamaIndex</td></tr>
+<tr><td>Web 框架</td><td><b>FastAPI + Uvicorn</b></td><td>你指定；异步、自带 Swagger</td><td>Flask</td></tr>
+<tr><td>模板</td><td><b>Jinja2 + 原生 JS/HTMX</b></td><td>轻量够用</td><td>Vue/React（过重）</td></tr>
+<tr><td>向量库</td><td><b>Chroma</b></td><td>纯本地、零运维、自带元数据过滤与持久化</td><td>FAISS / Qdrant</td></tr>
+<tr><td>嵌入模型</td><td><b>Qwen <code>text-embedding-v4</code>（1024 维）</b></td><td>中文强、便宜、国际站可用</td><td>BGE-m3（本地）</td></tr>
+<tr><td>生成模型</td><td><b>DeepSeek <code>deepseek-v4-flash</code></b></td><td>性价比极高、中文好、OpenAI 兼容</td><td>deepseek-v4-pro</td></tr>
+<tr><td>PDF 解析</td><td><b>PyMuPDF + pdfplumber</b></td><td>文本+表格兼顾、速度快</td><td>unstructured / marker</td></tr>
+<tr><td>Word 解析</td><td><b>python-docx + unstructured</b></td><td>结构与表格支持</td><td>docx2txt</td></tr>
+<tr><td>日志 / 配置</td><td><b>loguru / pydantic-settings</b></td><td>开箱即用、类型安全</td><td>logging / dotenv</td></tr>
+</tbody>
+</table>
+<div class="callout note"><div class="h">版本策略</div>以上均使用<b>当前稳定版并锁定版本号</b>（写入 <code>requirements.txt</code>），不追逐最新大版本，避免破坏性变更。</div>
+
+<h3>5.3 关键参数默认值（全部可调）</h3>
+<table>
+<thead><tr><th style="width:260px">参数</th><th style="width:220px">默认</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>CHUNK_SIZE</code></td><td>500 字符</td><td>分块大小</td></tr>
+<tr><td><code>CHUNK_OVERLAP</code></td><td>80 字符</td><td>块间重叠</td></tr>
+<tr><td><code>EMBEDDING_MODEL</code></td><td><code>text-embedding-v4</code></td><td>嵌入模型</td></tr>
+<tr><td><code>EMBEDDING_DIM</code></td><td>1024</td><td><b>改动需整库重建</b></td></tr>
+<tr><td><code>EMBEDDING_BATCH_SIZE</code></td><td>10</td><td>API 上限</td></tr>
+<tr><td><code>TOP_K</code></td><td>5</td><td>召回条数</td></tr>
+<tr><td><code>MAX_CONTEXT_TOKENS</code></td><td>6000</td><td>上下文上限</td></tr>
+<tr><td><code>LLM_MODEL</code></td><td><code>deepseek-v4-flash</code></td><td>生成模型</td></tr>
+<tr><td><code>TEMPERATURE</code></td><td>0.2</td><td>生成随机性</td></tr>
+<tr><td><code>MAX_HISTORY_TURNS</code></td><td>5</td><td>多轮保留轮数</td></tr>
+</tbody>
+</table>
+
+<h3>5.4 建议目录结构</h3>
+<pre><span class="c">D:\个人知识库rag系统\        # 项目根目录</span>
+├── app/
+│   ├── main.py                 <span class="c"># FastAPI 入口，挂载路由与模板</span>
+│   ├── config.py               <span class="c"># pydantic-settings 读取 .env</span>
+│   ├── api/
+│   │   ├── chat.py             <span class="c"># /api/chat</span>
+│   │   └── documents.py        <span class="c"># /api/documents*、/api/index/rebuild</span>
+│   ├── core/
+│   │   ├── loader.py           <span class="c"># 文档解析（pdf/docx/txt）</span>
+│   │   ├── splitter.py         <span class="c"># 分块</span>
+│   │   ├── embedder.py         <span class="c"># Qwen 向量化（含分批）</span>
+│   │   ├── vectorstore.py      <span class="c"># Chroma 封装（增删查）</span>
+│   │   ├── retriever.py        <span class="c"># Top-K 检索</span>
+│   │   ├── rewriter.py         <span class="c"># 多轮查询改写</span>
+│   │   ├── prompt.py           <span class="c"># 提示词模板</span>
+│   │   └── llm.py              <span class="c"># DeepSeek 调用（流式）</span>
+│   ├── models/schemas.py       <span class="c"># Pydantic 请求/响应模型</span>
+│   ├── templates/              <span class="c"># base / index / documents 页面</span>
+│   └── static/                 <span class="c"># css / js</span>
+├── data/
+│   ├── uploads/                <span class="c"># 原始文档</span>
+│   ├── chroma/                 <span class="c"># 向量库持久化</span>
+│   └── chat.db                 <span class="c"># 会话历史（可选）</span>
+├── logs/
+├── tests/                      <span class="c"># loader / splitter / retriever / api</span>
+├── .env.example
+├── .gitignore                  <span class="c"># 必须含 .env、data/、logs/</span>
+├── requirements.txt
+├── README.md
+└── start.ps1 / start.sh</pre>
+</section>
+
+<section id="s6">
+<h2><span class="num">6</span>配置与数据约定</h2>
+<h3>6.1 配置来源：API Key 走系统环境变量</h3>
+<p><b>安全约定（已确认）</b>：<code>DEEPSEEK_API_KEY</code> 与 <code>DASHSCOPE_API_KEY</code> 由<b>操作系统环境变量</b>提供（已配置完成），代码通过 <code>os.getenv()</code> 读取，<b>不写入任何文件、不写入 <code>.env</code>、不进版本库</b>。</p>
+<table>
+<thead><tr><th style="width:230px">变量</th><th style="width:140px">来源</th><th>行为要求</th></tr></thead>
+<tbody>
+<tr><td><code>DEEPSEEK_API_KEY</code></td><td>系统环境变量</td><td>启动时读取，缺失即<b>启动失败并提示配置方法</b></td></tr>
+<tr><td><code>DASHSCOPE_API_KEY</code></td><td>系统环境变量</td><td>同上</td></tr>
+</tbody>
+</table>
+<div class="callout note"><div class="h">两点提醒</div>环境变量修改后需<b>重启终端 / IDE</b> 才生效，别等第一次调接口才失败。另外本机 <code>DASHSCOPE_API_KEY</code> 长 117 位，明显长于百炼常见的 35 位 <code>sk-</code> 格式 —— 若嵌入接口报 <b>401</b>，优先排查它。</div>
+<p><code>.env</code> 只承载<b>非敏感</b>的可调参数：</p>
+<pre><span class="k"># ===== API 端点（不含凭证）=====</span>
+DEEPSEEK_BASE_URL=https://api.deepseek.com
+<span class="k"># 新加坡地域（按实际业务空间 ID 替换 {WorkspaceId}）</span>
+DASHSCOPE_BASE_URL=https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
+
+<span class="k"># ===== 模型与检索参数 =====</span>
+LLM_MODEL=deepseek-v4-flash
+EMBEDDING_MODEL=text-embedding-v4
+EMBEDDING_DIM=1024
+EMBEDDING_BATCH_SIZE=10
+TOP_K=5
+MAX_CONTEXT_TOKENS=6000
+TEMPERATURE=0.2
+MAX_HISTORY_TURNS=5
+
+<span class="k"># ===== 分块参数 =====</span>
+CHUNK_SIZE=500
+CHUNK_OVERLAP=80
+
+<span class="k"># ===== 存储路径 =====</span>
+CHROMA_DIR=./data/chroma
+UPLOAD_DIR=./data/uploads
+COLLECTION_NAME=knowledge_base</pre>
+
+<h3>6.2 向量元数据 Schema（Chroma metadata）</h3>
+<table>
+<thead><tr><th style="width:170px">字段</th><th style="width:110px">类型</th><th>说明</th></tr></thead>
+<tbody>
+<tr><td><code>source_file</code></td><td>str</td><td>原始文件名</td></tr>
+<tr><td><code>file_path</code></td><td>str</td><td>原始文件路径</td></tr>
+<tr><td><code>file_hash</code></td><td>str</td><td>内容 SHA-256，用于幂等判重</td></tr>
+<tr><td><code>doc_type</code></td><td>str</td><td><code>pdf</code> / <code>docx</code> / <code>txt</code></td></tr>
+<tr><td><code>page</code></td><td>int</td><td>页码（txt 为 0）</td></tr>
+<tr><td><code>chunk_index</code></td><td>int</td><td>该文件内块序号</td></tr>
+<tr><td><code>chunk_id</code></td><td>str</td><td><code>{file_hash}-{chunk_index}</code> 全局唯一</td></tr>
+<tr><td><code>created_at</code></td><td>str</td><td>ISO8601 导入时间</td></tr>
+</tbody>
+</table>
+<p style="color:var(--text-3);font-size:13px">检索时交给 LLM 的<b>上下文文本</b>与<b>来源元数据</b>分离存放：文本入 <code>documents</code>，元数据入 <code>metadatas</code>，便于引用展示。</p>
+</section>
+
+<section id="s7">
+<h2><span class="num">7</span>验收标准与测试方案</h2>
+<h3>7.1 验收清单（Definition of Done）</h3>
+<table>
+<thead><tr><th style="width:70px">编号</th><th style="width:150px">验收项</th><th>判定方法</th><th style="width:230px">通过线</th></tr></thead>
+<tbody>
+<tr><td>A1</td><td>文档导入</td><td>导入 10 份混合格式文档</td><td>成功率 ≥ 95%</td></tr>
+<tr><td>A2</td><td>检索准确率</td><td>20 条测试问答，人工标注</td><td>Top-5 命中率 ≥ 85%</td></tr>
+<tr><td>A3</td><td>溯源准确性</td><td>抽查 10 条回答</td><td>可溯源率 100%</td></tr>
+<tr><td>A4</td><td>响应时间</td><td>20 次提问计时</td><td>检索 P95&lt;1s、首字&lt;3s、整轮&lt;15s</td></tr>
+<tr><td>A5</td><td>多轮可用</td><td>连续 3 轮追问</td><td>第 3 轮正确复用上下文</td></tr>
+<tr><td>A6</td><td>兜底防幻觉</td><td>提问库外问题</td><td>回复"无相关信息"，不编造</td></tr>
+<tr><td>A7</td><td>幂等</td><td>同一文件导入两次</td><td>库内块数不变</td></tr>
+<tr><td>A8</td><td>删除生效</td><td>删除文件后检索</td><td>不再命中该文件</td></tr>
+<tr><td>A9</td><td>工程规范</td><td>检查仓库</td><td>一键启动、测试可跑、README 完整</td></tr>
+<tr><td>A10</td><td>成本可控</td><td>记录 API 用量</td><td>单次问答成本 &lt; $0.001</td></tr>
+</tbody>
+</table>
+
+<h3>7.2 测试集构建方法（用于 A2）</h3>
+<ol>
+  <li>从已入库文档中<b>人工挑选 20 个可明确回答的问题</b>。</li>
+  <li>每个问题标注对应的<b>正确来源文件 + 页码</b>（ground truth）。</li>
+  <li>跑一遍检索，统计正确来源是否落在 Top-5 内。</li>
+  <li>命中数 / 20 = 命中率，需 ≥ 85%（至少 17 条命中）。</li>
+  <li>该测试集固化为 <code>tests/eval_questions.json</code>，每次改动检索参数后回归。</li>
+</ol>
+
+<h3>7.3 自动化测试范围</h3>
+<ul>
+  <li><code>test_loader.py</code>：三种格式各一份样例，验证解析输出非空且含页码。</li>
+  <li><code>test_splitter.py</code>：验证块大小在预期区间、overlap 生效、表格块不被切。</li>
+  <li><code>test_retriever.py</code>：mock 嵌入接口，验证 Top-K 数量与排序。</li>
+  <li><code>test_api.py</code>：用 <code>TestClient</code> 打通 <code>/api/health</code>、<code>/api/documents</code> 等接口。</li>
+</ul>
+</section>
+
+<section id="s8">
+<h2><span class="num">8</span>风险与对策</h2>
+<table>
+<thead><tr><th style="width:60px">编号</th><th style="width:230px">风险</th><th style="width:180px">影响</th><th>对策</th></tr></thead>
+<tbody>
+<tr><td><b>R1</b></td><td>PDF 为扫描件/图片，无文本层</td><td>该文档入库为空</td><td>导入前检测文本层密度并告警；V2 再接 OCR</td></tr>
+<tr><td><b>R2</b></td><td>表格/公式解析错乱</td><td>检索到残缺内容</td><td>表格走 pdfplumber 单独抽取；公式明确标注为已知限制</td></tr>
+<tr><td><b>R3</b></td><td>中文分块边界切坏句子</td><td>检索片段语义破碎</td><td>中文标点作为分隔符 + 80 字符重叠</td></tr>
+<tr><td><b>R4</b></td><td>追问检索失败（指代丢失）</td><td>多轮体验差</td><td>必做查询改写（FR-10）</td></tr>
+<tr><td><b>R5</b></td><td>云端 API 限流/超时</td><td>导入或问答中断</td><td>重试+退避+超时；批量导入分批限速</td></tr>
+<tr><td><b>R6</b></td><td>模型幻觉</td><td>回答不可信</td><td>提示词强约束 + temperature 0.2 + 强制溯源</td></tr>
+<tr><td><b>R7</b></td><td>中途改嵌入维度</td><td>全库向量失效</td><td>V1 锁定 1024 维；改动前必须整库重建</td></tr>
+<tr><td><b>R8</b></td><td>API Key 泄漏</td><td>费用损失</td><td>Key 仅存 <code>.env</code>，<code>.gitignore</code> 排除</td></tr>
+<tr><td><b>R9</b></td><td>摘要式回答丢失细节</td><td>关键信息被略过</td><td>提示词要求"引用编号 + 忠实原文"</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="s9">
+<h2><span class="num">9</span>里程碑（建议交付顺序）</h2>
+<table>
+<thead><tr><th style="width:70px">阶段</th><th style="width:280px">目标</th><th>交付物</th><th style="width:120px">依赖</th></tr></thead>
+<tbody>
+<tr><td><b>M1</b></td><td>离线跑通「解析→分块→嵌入→入库」</td><td>CLI 脚本 + Chroma 数据</td><td>FR-01~04</td></tr>
+<tr><td><b>M2</b></td><td>离线跑通「检索→组装→生成」</td><td>CLI 问答脚本，能出带引用答案</td><td>FR-06~09</td></tr>
+<tr><td><b>M3</b></td><td>Web 化</td><td>FastAPI 服务 + 聊天页 + 管理页</td><td>FR-11、FR-12</td></tr>
+<tr><td><b>M4</b></td><td>多轮 + 验收</td><td>查询改写 + 测试集 + A1–A10 通过</td><td>FR-10、§7</td></tr>
+</tbody>
+</table>
+<div class="callout note"><div class="h">建议</div>每个里程碑都应<b>可独立运行、可演示</b>，避免"最后一刻才跑通"。</div>
+</section>
+
+<section id="s10">
+<h2><span class="num">10</span>待决事项（Open Questions）</h2>
+<table>
+<thead><tr><th style="width:60px">编号</th><th style="width:190px">问题</th><th>结论</th><th style="width:110px">状态</th></tr></thead>
+<tbody>
+<tr><td>Q1</td><td>表格解析库选型</td><td>M1 阶段用 3 份真实文档实测 <code>pdfplumber</code> / <code>unstructured</code> / <code>marker</code> 后定</td><td>✅ 已决</td></tr>
+<tr><td>Q2</td><td>会话历史是否持久化</td><td><b>V1 仅内存</b>；"跨重启记忆"非当前核心诉求，需要时再升 SQLite</td><td>✅ 已决</td></tr>
+<tr><td>Q3</td><td>是否 Docker 化</td><td><b>V1 不做</b>，改用 Python venv 做依赖隔离；对外分发时再评估</td><td>✅ 已决</td></tr>
+<tr><td>Q4</td><td>是否上混合检索 + Rerank</td><td>跟建议走：V1 先验收，命中率不达标再上</td><td>✅ 已决</td></tr>
+<tr><td>Q5</td><td>父文档-子块检索</td><td>V1 不做，列入 V2；解决"小块检索准但上下文残"的矛盾</td><td>✅ 已决（延后）</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="s11">
+<h2><span class="num">11</span>决策记录（Decision Log）</h2>
+<table>
+<thead><tr><th style="width:110px">日期</th><th style="width:150px">议题</th><th>决策</th><th style="width:220px">理由</th></tr></thead>
+<tbody>
+<tr><td>2026-10-13</td><td>文档解析范围</td><td>含表格与公式；V1 不做 OCR / 公式图片识别</td><td>控制 V1 范围</td></tr>
+<tr><td>2026-10-13</td><td>模型方案</td><td>全云端：DeepSeek 生成 + Qwen 嵌入</td><td>免本地算力，成本极低</td></tr>
+<tr><td>2026-10-13</td><td>向量库</td><td>Chroma（本地持久化）</td><td>零运维，够用</td></tr>
+<tr><td>2026-10-13</td><td>功能范围</td><td>标准版：检索问答 + 来源引用 + 多轮对话</td><td>可信度与体验的平衡点</td></tr>
+<tr><td>2026-10-13</td><td>API Key 管理</td><td>系统环境变量，代码 <code>os.getenv()</code> 读取</td><td>保密性更高，不落盘不入库</td></tr>
+<tr><td>2026-10-13</td><td>环境隔离</td><td><b>venv</b>，V1 不上 Docker</td><td>单机自用，Docker 收益低、成本高</td></tr>
+<tr><td>2026-10-13</td><td>会话历史</td><td>V1 仅内存，不落库</td><td>核心诉求是"问答准"而非"聊得久"</td></tr>
+<tr><td>2026-10-13</td><td>父文档-子块</td><td>V1 不做，V2 候选</td><td>先验证基础检索命中率</td></tr>
+<tr><td>2026-10-13</td><td>项目根目录</td><td><code>D:\个人知识库rag系统</code></td><td>用户指定</td></tr>
+</tbody>
+</table>
+</section>
+
+<section id="sa">
+<h2><span class="num">A</span>附录 · V1 → V2 演进方向（暂不实现）</h2>
+<ol>
+  <li><b>混合检索</b>：BM25 关键词 + 向量双路召回（<code>text-embedding-v4</code> 已支持稀疏向量）。</li>
+  <li><b>重排序</b>：接入 Rerank 模型对 Top-20 精排取 Top-5。</li>
+  <li><b>OCR</b>：扫描件接入 PaddleOCR。</li>
+  <li><b>父文档检索</b>：小块召回、大块供给，兼顾准确率与上下文完整。</li>
+  <li><b>多知识库</b>：按项目/课程分 collection。</li>
+  <li><b>评测自动化</b>：RAGAS 等框架做忠实度/相关性打分。</li>
+</ol>
+</section>
+
+<footer>RAG 本地知识库问答系统 · 需求文档 v1.0 · 2026-10-13 · 文档结束</footer>
+</main>
+</div>
+</body>
+</html>

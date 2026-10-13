@@ -1,0 +1,70 @@
+# ==============================================================
+# RAG 本地知识库问答系统 —— Git 忽略规则
+# 原则：密钥、原始数据、日志、虚拟环境，一律不进版本库
+# ==============================================================
+
+# ---------- 密钥与本地配置（最高优先级，务必保留）----------
+.env
+.env.local
+.env.*.local
+*.key
+*.pem
+
+# ---------- Python 虚拟环境 ----------
+.venv/
+venv/
+env/
+ENV/
+
+# ---------- 数据目录：保留目录结构，忽略其中内容 ----------
+data/uploads/*
+!data/uploads/.gitkeep
+data/chroma/*
+!data/chroma/.gitkeep
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+chat.db
+
+# ---------- 日志 ----------
+logs/*
+!logs/.gitkeep
+*.log
+
+# ---------- Python 编译产物 ----------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# ---------- 测试与工具缓存 ----------
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.cache/
+
+# ---------- IDE / 编辑器 ----------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ---------- 操作系统 ----------
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 临时文件 ----------
+*.tmp
+*.bak
+*.orig
