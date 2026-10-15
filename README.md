@@ -1,6 +1,6 @@
 # RAG_konwledge_base_system
 
-> A personal knowledge base system constructed based on the basic Retrieval-Augmented Generation technology. It is currently in the development and iteration process.
+> A personal knowledge base system constructed based on the Naive Retrieval-Augmented Generation technology. It is currently in the development and iteration process.
 
 基于 LangChain + FastAPI 的**本地私有知识库问答系统**。把 PDF / Word / TXT 导入知识库，提问时用向量检索召回原文片段，交给大模型生成**带出处**的回答，通过浏览器页面使用。
 
