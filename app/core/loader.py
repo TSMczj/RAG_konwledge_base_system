@@ -38,9 +38,12 @@ FR-02 明确要求「单文件解析失败不阻断整批导入」。所以本�
 
 from __future__ import annotations
 
+import codecs
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
+
+from charset_normalizer import from_bytes
 
 from app.logging_config import logger
 
@@ -51,6 +54,29 @@ from app.logging_config import logger
 # 也让 IDE 能跳转、重构时不会漏改。
 KIND_TEXT: str = "text"
 KIND_TABLE: str = "table"
+
+# ---------------------------------------------------------------------------
+# 编码探测相关常量
+# ---------------------------------------------------------------------------
+# BOM（字节顺序标记）一旦命中就是铁证，不需要也不应该再去"猜"。
+#
+# ⚠️ 这里有两个坑，都是实测踩出来的：
+#   1. 顺序不能乱 —— UTF-32 的 BOM 前两字节（FF FE / FE FF）与 UTF-16 相同，
+#      必须先判 UTF-32，否则 UTF-32 文件会被误判成 UTF-16 解出乱码；
+#   2. 必须用 "utf-16" / "utf-32"，**不能**用 "utf-16-le" / "utf-32-le" ——
+#      前者会读取并剥离 BOM，后者会把 BOM 当正文，导致文本开头多出一个 \ufeff。
+_BOM_ENCODINGS: tuple[tuple[bytes, str], ...] = (
+    (codecs.BOM_UTF8, "utf-8-sig"),
+    (codecs.BOM_UTF32_LE, "utf-32"),
+    (codecs.BOM_UTF32_BE, "utf-32"),
+    (codecs.BOM_UTF16_LE, "utf-16"),
+    (codecs.BOM_UTF16_BE, "utf-16"),
+)
+
+# 探测失败时的兜底顺序：
+#   - gb18030 是 GBK / GB2312 的超集，放最前，能覆盖绝大多数简体中文老文件；
+#   - latin-1 是单字节且永不抛错，放最后，保证函数一定有返回。
+_FALLBACK_ENCODINGS: tuple[str, ...] = ("gb18030", "big5", "shift_jis", "cp1252", "latin-1")
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +140,123 @@ class LoadedDocument:
         """文档页数。没有页码概念的格式统一按 1 页处理。"""
         pages = {seg.page for seg in self.segments if seg.page > 0}
         return max(pages) if pages else 1
+
+
+# ---------------------------------------------------------------------------
+# 文本解码与规范化（供各解析器复用）
+# ---------------------------------------------------------------------------
+def _detect_encoding(raw: bytes) -> str | None:
+    """用 charset-normalizer 探测编码；**探测结果不可信时返回 None**。
+
+    如何判断"不可信"（依据 2026-10-16 的实测）
+    ------------------------------------------
+    对 4 字节的 GBK 文本 ``"中文"``，探测库给出的候选 big5 / cp949 / gb18030
+    的 chaos **全是 0**，即库自己也无法区分，它最终选了 big5 并解出乱码 ``"笢恅"``。
+    而 48 字节以上的 GBK 文本能正确选到 gb18030（因为次选 cp949 的 chaos 是 0.113，
+    存在明显的信号差）。
+
+    据此设定规则：**首选与次选的 chaos 同时为 0 时，说明库没有任何区分依据，
+    此时它的排序等同于随机**，不采信；改由 :data:`_FALLBACK_ENCODINGS`
+    按本项目的语料先验（以简体中文为主）选择。
+
+    Args:
+        raw: 原始字节内容。
+
+    Returns:
+        可采信的编码名；无区分信号或探测失败时返回 ``None``。
+    """
+    matches = from_bytes(raw)
+    best = matches.best()
+    if best is None:
+        return None
+
+    runner_up = next((m for m in matches if m.encoding != best.encoding), None)
+    if best.chaos == 0.0 and runner_up is not None and runner_up.chaos == 0.0:
+        logger.debug(
+            "编码探测无区分信号（{} 与 {} 的 chaos 同为 0），改用语料先验",
+            best.encoding, runner_up.encoding,
+        )
+        return None
+
+    return best.encoding
+
+
+def decode_text(raw: bytes) -> tuple[str, str]:
+    """把字节流解码为文本，自动探测编码（对应 T-1.2）。
+
+    探测顺序（从最可靠到最兜底）：
+
+    1. **BOM**：文件自带字节顺序标记时直接采用，这是铁证；
+    2. **严格 UTF-8**：先试一次。理由是不能完全依赖自动探测 ——
+       对已经是合法 UTF-8 的文本，探测库偶尔会给出 cp1252 之类的误判；
+       而 UTF-8 是当下绝大多数文件的编码，先试一次成本极低；
+    3. **charset-normalizer 探测**：处理 GBK / Big5 等中文老编码，
+       但仅在探测确实"有区分信号"时才采信（见 :func:`_detect_encoding`）；
+    4. **固定兜底链**：见 :data:`_FALLBACK_ENCODINGS`。
+       它同时承担"探测无信号时按语料先验选择"的职责。
+
+    Args:
+        raw: 原始字节内容。
+
+    Returns:
+        ``(文本, 实际使用的编码名)``。编码名会写进日志，便于排查乱码问题。
+
+    Note:
+        本函数**不会抛异常**：最坏情况由 latin-1 兜底，它不会失败。
+    """
+    if not raw:
+        return "", "utf-8"
+
+    # 1) BOM
+    for bom, encoding in _BOM_ENCODINGS:
+        if raw.startswith(bom):
+            return raw.decode(encoding), encoding
+
+    # 2) 严格 UTF-8
+    try:
+        return raw.decode("utf-8"), "utf-8"
+    except UnicodeDecodeError:
+        pass
+
+    # 3) charset-normalizer 探测（仅在确实有区分信号时才采信）
+    detected = _detect_encoding(raw)
+    if detected is not None:
+        try:
+            return raw.decode(detected), detected
+        except (UnicodeDecodeError, LookupError) as exc:
+            # 探测结果可能是 Python 不认识的编码名，或解码仍失败 —— 继续走兜底链
+            logger.debug("编码探测结果 {} 不可用（{}），改用兜底链", detected, exc)
+
+    # 4) 兜底链
+    for encoding in _FALLBACK_ENCODINGS:
+        try:
+            text = raw.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+        logger.debug("使用兜底/先验编码 {} 解码", encoding)
+        return text, encoding
+
+    # 5) 理论上到不了这里（latin-1 不会失败），保留以防将来改动兜底链
+    return raw.decode("utf-8", errors="replace"), "utf-8(replace)"
+
+
+def normalize_text(text: str) -> str:
+    """统一换行符为 ``\\n``，并去掉首尾空白。
+
+    为什么必须做这一步
+    ------------------
+    Windows 上的文本换行是 ``\\r\\n``，而下游分块（T-2.1）依赖段落分隔符 ``"\\n\\n"``。
+    ``"\\r\\n\\r\\n"`` 里并不包含连续的 ``"\\n\\n"``，会导致**整篇文档被当成一个段落切不开**。
+    在加载层的统一出口做掉这件事，所有格式（TXT / PDF / Word）行为一致，
+    不需要每个解析器各写一遍。
+
+    Args:
+        text: 原始文本。
+
+    Returns:
+        换行统一为 ``\\n``、首尾空白已去掉的文本。
+    """
+    return text.replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
 # ---------------------------------------------------------------------------
@@ -231,12 +374,20 @@ def load_document(path: str | Path) -> LoadedDocument:
 
     # ---- 情况 3：解析 ----
     try:
-        # 过滤掉空白段：解析器可能因版面原因产出空串，留着会污染后续分块
-        segments = [seg for seg in loader(p) if seg.text and seg.text.strip()]
+        raw_segments = list(loader(p))
     except Exception as exc:  # noqa: BLE001 —— 这里必须兜住一切，否则整批导入会中断
         doc.error = f"{type(exc).__name__}: {exc}"
         logger.warning("解析失败: {} -> {}", p.name, doc.error)
         return doc
+
+    # 统一在出口做两件事，保证所有格式产出的文本行为一致：
+    #   1) 换行符归一化为 \n —— 否则下游分块匹配不到段落分隔符 "\n\n"（见 normalize_text）；
+    #   2) 丢掉空白段 —— 解析器可能因版面原因产出空串，留着会污染后续分块。
+    segments: list[Segment] = []
+    for seg in raw_segments:
+        text = normalize_text(seg.text)
+        if text:
+            segments.append(Segment(text=text, page=seg.page, kind=seg.kind))
 
     doc.segments = segments
 
@@ -253,14 +404,45 @@ def load_document(path: str | Path) -> LoadedDocument:
     return doc
 
 
+# ---------------------------------------------------------------------------
+# 具体格式解析器
+#
+# 约定：每个解析器只负责「把文件变成若干 Segment」，不负责切分、不负责编码兜底
+# （换行归一等通用处理由 load_document 统一完成）。新增格式时在这里加一个函数即可。
+# ---------------------------------------------------------------------------
+@register_loader(".txt")
+def _load_txt(path: Path) -> list[Segment]:
+    """解析纯文本文件（对应 T-1.2 / FR-02）。
+
+    纯文本没有"页"的概念，因此整篇作为**一个** Segment 返回（``page=0``）。
+    真正的切分交给下游分块器（T-2.1），本函数不做任何切分动作。
+
+    Args:
+        path: 文本文件路径。
+
+    Returns:
+        只含一个正文 Segment 的列表。
+
+    Raises:
+        可能抛 ``OSError``（文件读取失败）。这类异常由 :func:`load_document`
+        统一捕获并转成 ``error`` 字段，解析器自身不必提前处理。
+    """
+    text, encoding = decode_text(path.read_bytes())
+    # 记下探测结果：出现乱码时，这一行日志是排查的第一手线索
+    logger.debug("TXT 编码探测结果: {} -> {}", path.name, encoding)
+    return [Segment(text=text, page=0, kind=KIND_TEXT)]
+
+
 __all__ = [
     "KIND_TABLE",
     "KIND_TEXT",
     "LoadedDocument",
     "LoaderFunc",
     "Segment",
+    "decode_text",
     "is_supported",
     "load_document",
+    "normalize_text",
     "register_loader",
     "supported_extensions",
 ]
