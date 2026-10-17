@@ -49,18 +49,18 @@
 
 > **出口标准**：`scripts/check_models.py` 能同时连通 DeepSeek 与 Qwen，打印出各自响应。
 
-- [ ] **T-0.1 创建项目目录骨架** `S`
+- [x] **T-0.1 创建项目目录骨架** `S`
   - 交付：`app/`、`app/{api,core,models,templates,static}/`、`data/{uploads,chroma}/`、`logs/`、`tests/`、`scripts/` 及各级 `__init__.py`
   - 依赖：—
   - 验收：目录结构与需求文档 §5.4 一致
 
-- [ ] **T-0.2 建虚拟环境与依赖清单** `S`
+- [x] **T-0.2 建虚拟环境与依赖清单** `S`
   - 交付：`.venv/` + `requirements.txt`
   - 内容：`langchain`、`langchain-community`、`langchain-chroma`、`fastapi`、`uvicorn[standard]`、`chromadb`、`pymupdf`、`pdfplumber`、`python-docx`、`charset-normalizer`、`openai`、`pydantic-settings`、`loguru`、`jinja2`、`pytest`、`httpx`
   - 依赖：T-0.1
   - 验收：`pip install -r requirements.txt` 无报错；**版本号已锁定**
 
-- [ ] **T-0.3 配置模块 `config.py`** `M`
+- [x] **T-0.3 配置模块 `config.py`** `M`
   - 交付：`app/config.py`
   - 要求：用 `pydantic-settings`
     - `DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY` 走 **`os.getenv()`**，**缺失时启动即报错并给出配置提示**
@@ -68,17 +68,17 @@
   - 依赖：T-0.2
   - 验收：故意清掉环境变量，程序给出清晰报错而非静默失败
 
-- [ ] **T-0.4 工程基建文件** `S`
+- [x] **T-0.4 工程基建文件** `S`
   - 交付：`.gitignore`（排除 `.venv/`、`.env`、`data/`、`logs/`、`__pycache__/`）、`.env.example`、`README.md` 骨架、`git init`
   - 依赖：T-0.1
   - 验收：`git status` 中看不到 `.env` 与 `data/`
 
-- [ ] **T-0.5 统一日志** `S`
+- [x] **T-0.5 统一日志** `S`
   - 交付：loguru 初始化，控制台 + `logs/app.log`（滚动）
   - 依赖：T-0.3
   - 验收：任意模块 `logger.info()` 能落到文件
 
-- [ ] **T-0.6 模型连通性自检脚本** `S`
+- [x] **T-0.6 模型连通性自检脚本** `S`
   - 交付：`scripts/check_models.py`
   - 要求：对 DeepSeek（`deepseek-v4-flash`）与 Qwen（`text-embedding-v4`）**各发 1 次最小请求**，打印状态码、耗时、返回维度
   - 依赖：T-0.3
@@ -92,13 +92,13 @@
 
 ### 3.1 文档解析（FR-02）
 
-- [ ] **T-1.1 加载器抽象层** `M`
+- [x] **T-1.1 加载器抽象层** `M`
   - 交付：`app/core/loader.py`
   - 要求：按扩展名分发到具体解析器；**统一返回结构**（`text`、`metadata`），便于下游一致处理
   - 依赖：T-0.3
   - 验收：新增格式只需加一个函数，不改调用方
 
-- [ ] **T-1.2 TXT 加载器** `S`
+- [x] **T-1.2 TXT 加载器** `S`
   - 交付：`loader.py` 中的 txt 分支
   - 要求：`charset-normalizer` 编码探测，默认 UTF-8
   - 依赖：T-1.1
