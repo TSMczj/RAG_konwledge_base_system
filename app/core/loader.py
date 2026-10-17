@@ -433,6 +433,62 @@ def _load_txt(path: Path) -> list[Segment]:
     return [Segment(text=text, page=0, kind=KIND_TEXT)]
 
 
+@register_loader(".pdf")
+def _load_pdf(path: Path) -> list[Segment]:
+    """解析 PDF 正文，按页产出 Segment（对应 T-1.3 / FR-02）。
+
+    为什么一页一个 Segment
+    ----------------------
+    FR-06 / FR-09 要求回答能标注「第 x 页」。页码信息一旦在解析阶段被拍平，
+    下游无论怎么切块都补不回来，所以这里按页保留边界，页码从 1 开始。
+
+    已知限制（V1 明确接受）
+    ----------------------
+    - **只取文本层**：扫描件 / 纯图片页会得到空文本，由 :func:`load_document`
+      统一告警（扫描件检测见 T-1.7），V1 不做 OCR；
+    - **不识别分栏**：双栏论文可能按页面几何顺序而非人类阅读顺序输出；
+    - **图片公式会丢失**：PDF 中公式若为图片形式，V1 不做公式识别（FR-02 已注明）；
+    - **表格文字暂未分离**：本函数取的是整页文本流，表格内容会按阅读顺序混在正文里；
+      T-1.4 会用 pdfplumber 单独抽表，并负责把表格区域从正文中排除，避免同一张表入库两次。
+
+    Args:
+        path: PDF 文件路径。
+
+    Returns:
+        每页一个 Segment（``page`` 从 1 开始）。空白页也会保留，由
+        :func:`load_document` 在统一出口过滤。
+
+    Raises:
+        ValueError: PDF 需要密码才能打开（不尝试破解）。
+        pymupdf.FileDataError: 文件损坏或不是合法的 PDF。
+
+    Note:
+        这里**延迟导入** ``pymupdf``：仅做格式判断或处理 TXT 时不必加载 PDF 引擎，
+        也让本模块在缺少 PDF 依赖时仍能被导入（例如只跑 TXT 相关测试）。
+    """
+    import pymupdf
+
+    segments: list[Segment] = []
+    with pymupdf.open(path) as doc:
+        # 有密码的 PDF 直接给出可读错误，由 load_document 收敛到 error 字段。
+        # 先试空密码：部分 PDF 只设了「所有者密码」（仅限制编辑/打印），正文仍可读。
+        if doc.needs_pass and not doc.authenticate(""):
+            raise ValueError("PDF 已加密，需先解除密码保护再导入")
+
+        for page in doc:
+            segments.append(
+                Segment(
+                    text=page.get_text("text"),
+                    # page.number 是 0 基索引，而展示给用户的「第 x 页」从 1 开始
+                    page=page.number + 1,
+                    kind=KIND_TEXT,
+                )
+            )
+
+    logger.debug("PDF 解析完成: {} -> {} 页", path.name, len(segments))
+    return segments
+
+
 __all__ = [
     "KIND_TABLE",
     "KIND_TEXT",
