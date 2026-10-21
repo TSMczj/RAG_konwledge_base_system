@@ -4,7 +4,7 @@
 ----
 把不同格式的文件统一抽成「分段列表 + 文档元数据」，供下游分块（T-2.x）使用。
 本模块**只负责按扩展名分发**，各格式的具体解析逻辑由 T-1.2 ~ T-1.5 逐步补上
-（TXT、PDF 正文与表格已实现；Word 见 T-1.5）。
+（TXT、PDF 正文与表格、Word 均已实现）。
 
 为什么返回「分段(Segment)」而不是一整段纯文本
 ---------------------------------------------
@@ -40,6 +40,7 @@ FR-02 明确要求「单文件解析失败不阻断整批导入」。所以本�
 from __future__ import annotations
 
 import codecs
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Iterable
@@ -435,7 +436,7 @@ def _load_txt(path: Path) -> list[Segment]:
 
 
 # ---------------------------------------------------------------------------
-# PDF 表格抽取辅助（T-1.4）
+# 表格文本辅助（T-1.4 PDF / T-1.5 Word 共用）
 #
 # 设计取舍
 # --------
@@ -455,12 +456,15 @@ _TABLE_OVERLAP_THRESHOLD = 0.5  # 文本块与表格重叠超过一半才剔除�
 #: pdfplumber 的表格 bbox：(x0, top, x1, bottom)，单位是 PDF 点
 TableBox = tuple[float, float, float, float]
 
+# 注意：下面的单元格清洗与 Markdown 生成是格式无关的，Word 解析（T-1.5）直接复用；
+# 上面的阈值与 _is_useful_table 只用于过滤 PDF 的版式框，Word 表格无需这套过滤。
+
 
 def _clean_table_cell(cell: str | None) -> str:
-    """把 pdfplumber 的单元格清洗成能放进 Markdown 表格的文本。
+    """把表格单元格清洗成能放进 Markdown 表格的文本。
 
     Args:
-        cell: 原始单元格；pdfplumber 对空单元格返回 ``None``。
+        cell: 原始单元格；pdfplumber 的空单元格返回 ``None``，python-docx 返回字符串。
 
     Returns:
         去掉首尾空白、换行转 ``<br>``、竖线已转义的单元格文本。
@@ -475,23 +479,24 @@ def _clean_table_cell(cell: str | None) -> str:
 
 
 def _table_to_markdown(rows: list[list[str | None]]) -> str:
-    """把 pdfplumber 的行列数据转成 Markdown 表格。
+    """把行列数据转成 Markdown 表格（pdfplumber / python-docx 共用）。
 
-    首行按表头处理（pdfplumber 不区分表头，这是最通用的做法）。
+    首行按表头处理（两家库都不区分表头，这是最通用的做法）。
 
     Args:
-        rows: ``Table.extract()`` 的返回值，单元格可能为 ``None``。
+        rows: 每行一个单元格列表；单元格可能为 ``None``（pdfplumber）。
 
     Returns:
-        Markdown 表格文本；不足 2 行或全空时返回空串。
+        Markdown 表格文本；全空时返回空串。单行数据会生成只有表头的表格，
+        这样 Word 里的单行表格也不会丢内容。
     """
     cleaned: list[list[str]] = []
     for row in rows:
         cells = [_clean_table_cell(cell) for cell in row]
-        if any(cells):  # 丢掉纯空行（pdfplumber 偶尔会产出）
+        if any(cells):  # 丢掉纯空行（解析库偶尔会产出）
             cleaned.append(cells)
 
-    if len(cleaned) < 2:
+    if not cleaned:
         return ""
 
     width = max(len(row) for row in cleaned)
@@ -708,6 +713,115 @@ def _load_pdf(path: Path) -> list[Segment]:
                 plumber_doc.close()
 
     logger.debug("PDF 解析完成: {} -> {} 段", path.name, len(segments))
+    return segments
+
+
+# ---------------------------------------------------------------------------
+# Word 解析器（T-1.5）
+# ---------------------------------------------------------------------------
+#: Word 内置标题样式：英文 ``Heading N`` / 中文「标题 N」；``Title`` 归为一级
+_HEADING_STYLE_RE = re.compile(r"^(?:heading|标题)\s*([1-9])$", re.IGNORECASE)
+
+
+def _heading_level(paragraph) -> int | None:
+    """返回段落的标题级别（1~6）；正文返回 ``None``。
+
+    Args:
+        paragraph: python-docx 的 Paragraph。
+
+    Returns:
+        标题级别；不是标题样式时返回 ``None``。
+    """
+    style = getattr(paragraph, "style", None)
+    name = (getattr(style, "name", "") or "").strip()
+
+    match = _HEADING_STYLE_RE.match(name)
+    if match:
+        # Word 允许 1~9 级标题，Markdown 最多 6 个井号，多出来的按 6 级处理
+        return min(int(match.group(1)), 6)
+    if name.lower() == "title":
+        return 1
+    return None
+
+
+def _docx_table_rows(table) -> list[list[str | None]]:
+    """把 python-docx 的表格转成行列数据，复用 :func:`_table_to_markdown`。
+
+    Args:
+        table: python-docx 的 Table。
+
+    Returns:
+        每行一个单元格文本列表。合并单元格会被 python-docx 按行重复返回。
+    """
+    return [[cell.text for cell in row.cells] for row in table.rows]
+
+
+@register_loader(".docx")
+def _load_docx(path: Path) -> list[Segment]:
+    """解析 Word 文档的段落与表格（对应 T-1.5 / FR-02）。
+
+    输出结构
+    --------
+    - 正文：``kind=KIND_TEXT``，连续段落攒成一个 Segment；
+    - 表格：``kind=KIND_TABLE``，Markdown 文本，整表一个 Segment（T-2.2 不切分）。
+
+    遍历用 ``Document.iter_inner_content()`` 按文档真实顺序拿到段落和表格；
+    遇到表格时先把前面的段落落盘，因此正文与表格的相对顺序不会被拆散。
+    如果分开取 ``doc.paragraphs`` 和 ``doc.tables``，两者的先后关系就丢了。
+
+    标题层级
+    --------
+    用 Markdown 井号表达：Heading 1 → ``# ...``，Heading 2 → ``## ...``，
+    这样下游分块和检索也能看到层级信息。Word 的页码依赖排版，python-docx
+    拿不到可靠页码，所以统一 ``page=0``（与 TXT 一致）。
+
+    已知限制（V1 明确接受）
+    ----------------------
+    - 只支持 ``.docx``；旧二进制 ``.doc`` 不在支持范围；
+    - 页眉/页脚、脚注、批注、文本框、图片不抽取；
+    - 合并单元格会被 python-docx 按行重复返回，Markdown 中可能出现重复文字；
+    - 嵌套表格只取外层单元格的段落文本，内层表格不单独展开；
+    - 只认内置 Heading 样式（含中文“标题 N”）与 Title，手工加粗的“标题”没有层级。
+
+    Args:
+        path: Word 文件路径。
+
+    Returns:
+        正文 Segment + 表格 Segment（``page=0``）。
+
+    Raises:
+        docx.opc.exceptions.PackageNotFoundError: 不是合法的 docx / 已损坏。
+    """
+    from docx import Document
+    from docx.table import Table
+
+    document = Document(str(path))
+    segments: list[Segment] = []
+    buffer: list[str] = []
+
+    def flush() -> None:
+        """把缓冲区里的连续段落落成一个正文 Segment。"""
+        nonlocal buffer
+        if buffer:
+            segments.append(Segment(text="\n\n".join(buffer), page=0, kind=KIND_TEXT))
+            buffer = []
+
+    for item in document.iter_inner_content():
+        if isinstance(item, Table):
+            flush()  # 先落盘表格之前的段落，保证正文/表格顺序
+            markdown = _table_to_markdown(_docx_table_rows(item))
+            if markdown:
+                segments.append(Segment(text=markdown, page=0, kind=KIND_TABLE))
+            continue
+
+        text = item.text.strip()
+        if not text:
+            continue
+        level = _heading_level(item)
+        buffer.append(f"{'#' * level} {text}" if level else text)
+
+    flush()
+    logger.debug("DOCX 解析完成: {} -> {} 段", path.name, len(segments))
     return segments
 
 
