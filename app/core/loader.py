@@ -3,7 +3,8 @@
 职责
 ----
 把不同格式的文件统一抽成「分段列表 + 文档元数据」，供下游分块（T-2.x）使用。
-本模块**只负责按扩展名分发**，各格式的具体解析逻辑由 T-1.2 ~ T-1.5 逐步补上。
+本模块**只负责按扩展名分发**，各格式的具体解析逻辑由 T-1.2 ~ T-1.5 逐步补上
+（TXT、PDF 正文与表格已实现；Word 见 T-1.5）。
 
 为什么返回「分段(Segment)」而不是一整段纯文本
 ---------------------------------------------
@@ -433,12 +434,199 @@ def _load_txt(path: Path) -> list[Segment]:
     return [Segment(text=text, page=0, kind=KIND_TEXT)]
 
 
+# ---------------------------------------------------------------------------
+# PDF 表格抽取辅助（T-1.4）
+#
+# 设计取舍
+# --------
+# 正文仍由 PyMuPDF 抽取（T-1.3），表格交给 pdfplumber（T-1.4）：
+#   - 两家库都使用「页面左上角为原点」的 PDF 点坐标，bbox 可以直接对齐；
+#   - 先用 pdfplumber 找到表格区域，再把与表格重叠的 PyMuPDF 文本块从正文中剔除，
+#     避免同一张表既进正文、又进表格 Segment（重复入库会拉低检索质量）。
+#
+# 只认「有框线」的表格：pdfplumber 默认按线条检测。无框线表格 V1 不识别，
+# 其文字会原样留在正文里，至少不会丢内容。
+# ---------------------------------------------------------------------------
+_TABLE_MIN_ROWS = 2             # 少于 2 行多半是版式框，不是表格
+_TABLE_MIN_COLS = 2             # 单列布局对问答没有价值，且容易误判
+_TABLE_MIN_CELLS = 4            # 至少要有 4 个非空单元格
+_TABLE_OVERLAP_THRESHOLD = 0.5  # 文本块与表格重叠超过一半才剔除，避免误删相邻段落
+
+#: pdfplumber 的表格 bbox：(x0, top, x1, bottom)，单位是 PDF 点
+TableBox = tuple[float, float, float, float]
+
+
+def _clean_table_cell(cell: str | None) -> str:
+    """把 pdfplumber 的单元格清洗成能放进 Markdown 表格的文本。
+
+    Args:
+        cell: 原始单元格；pdfplumber 对空单元格返回 ``None``。
+
+    Returns:
+        去掉首尾空白、换行转 ``<br>``、竖线已转义的单元格文本。
+    """
+    if cell is None:
+        return ""
+    text = str(cell).replace("\r\n", "\n").replace("\r", "\n").strip()
+    # Markdown 表格的单元格不能有裸换行，用 <br> 保留换行语义
+    text = text.replace("\n", "<br>")
+    # 竖线是列分隔符，不转义会让整行错列
+    return text.replace("|", "\\|")
+
+
+def _table_to_markdown(rows: list[list[str | None]]) -> str:
+    """把 pdfplumber 的行列数据转成 Markdown 表格。
+
+    首行按表头处理（pdfplumber 不区分表头，这是最通用的做法）。
+
+    Args:
+        rows: ``Table.extract()`` 的返回值，单元格可能为 ``None``。
+
+    Returns:
+        Markdown 表格文本；不足 2 行或全空时返回空串。
+    """
+    cleaned: list[list[str]] = []
+    for row in rows:
+        cells = [_clean_table_cell(cell) for cell in row]
+        if any(cells):  # 丢掉纯空行（pdfplumber 偶尔会产出）
+            cleaned.append(cells)
+
+    if len(cleaned) < 2:
+        return ""
+
+    width = max(len(row) for row in cleaned)
+    padded = [row + [""] * (width - len(row)) for row in cleaned]
+    lines = [
+        "| " + " | ".join(padded[0]) + " |",
+        "| " + " | ".join(["---"] * width) + " |",
+    ]
+    lines.extend("| " + " | ".join(row) + " |" for row in padded[1:])
+    return "\n".join(lines)
+
+
+def _is_useful_table(rows: list[list[str | None]]) -> bool:
+    """过滤版式框、单列布局等假表格，避免把页面装饰当表格入库。"""
+    if len(rows) < _TABLE_MIN_ROWS:
+        return False
+    width = max((len(row) for row in rows), default=0)
+    if width < _TABLE_MIN_COLS:
+        return False
+    non_empty = sum(1 for row in rows for cell in row if cell and str(cell).strip())
+    return non_empty >= _TABLE_MIN_CELLS
+
+
+def _rect_overlap_ratio(block: tuple[float, float, float, float], box: TableBox) -> float:
+    """计算文本块落在表格区域内的面积比例。"""
+    ix0, iy0 = max(block[0], box[0]), max(block[1], box[1])
+    ix1, iy1 = min(block[2], box[2]), min(block[3], box[3])
+    if ix1 <= ix0 or iy1 <= iy0:
+        return 0.0
+    block_area = (block[2] - block[0]) * (block[3] - block[1])
+    if block_area <= 0:
+        return 0.0
+    return ((ix1 - ix0) * (iy1 - iy0)) / block_area
+
+
+def _is_block_in_table(block: tuple[float, float, float, float], box: TableBox) -> bool:
+    """判断文本块是否属于表格。
+
+    只看重叠面积不够：表格角落的小文本块可能只压到表格一小部分；
+    反过来只看中心点也不够：跨表格边界的长段落中心可能在表格外。
+    两个条件取「或」，兼顾这两种情况。
+    """
+    if _rect_overlap_ratio(block, box) >= _TABLE_OVERLAP_THRESHOLD:
+        return True
+    cx = (block[0] + block[2]) / 2
+    cy = (block[1] + block[3]) / 2
+    return box[0] <= cx <= box[2] and box[1] <= cy <= box[3]
+
+
+def _extract_page_tables(plumber_page) -> list[tuple[TableBox, list[list[str | None]]]]:
+    """用 pdfplumber 抽取一页里的表格（默认只识别有框线的表格）。"""
+    try:
+        found = plumber_page.find_tables()
+    except Exception as exc:  # noqa: BLE001 —— 表格失败不能拖垮整页正文
+        logger.warning("PDF 表格检测失败（第 {} 页）: {}", plumber_page.page_number, exc)
+        return []
+
+    tables: list[tuple[TableBox, list[list[str | None]]]] = []
+    for table in found:
+        try:
+            rows = table.extract()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("PDF 表格读取失败（第 {} 页）: {}", plumber_page.page_number, exc)
+            continue
+        if _is_useful_table(rows):
+            tables.append((tuple(table.bbox), rows))
+    return tables
+
+
+def _page_text_excluding_tables(pdf_page, boxes: list[TableBox]) -> str:
+    """取一页正文，剔除落在表格区域内的文本块。
+
+    Args:
+        pdf_page: PyMuPDF 的 Page。
+        boxes: 本页所有表格的 bbox；为空时直接返回整页文本。
+
+    Returns:
+        不含表格文字的正文。
+    """
+    if not boxes:
+        return pdf_page.get_text("text")
+
+    kept: list[str] = []
+    for block in pdf_page.get_text("blocks"):
+        # blocks 元素：(x0, y0, x1, y1, text, block_no, block_type)
+        if len(block) < 7 or block[6] != 0:  # 只处理文本块，跳过图片块
+            continue
+        rect = (block[0], block[1], block[2], block[3])
+        if any(_is_block_in_table(rect, box) for box in boxes):
+            continue
+        text = block[4].strip()
+        if text:
+            kept.append(text)
+    return "\n\n".join(kept)
+
+
+def _scale_table_boxes(
+    pdf_page,
+    plumber_page,
+    tables: list[tuple[TableBox, list[list[str | None]]]],
+) -> list[tuple[TableBox, list[list[str | None]]]]:
+    """把 pdfplumber 的 bbox 换算到 PyMuPDF 的页面坐标系。
+
+    两者都使用「左上角为原点」的 PDF 点，正常情况下比例就是 1；
+    这里仍做一次缩放，兼容页面尺寸声明不一致的 PDF。
+    """
+    width = getattr(plumber_page, "width", 0) or 0
+    height = getattr(plumber_page, "height", 0) or 0
+    if width <= 0 or height <= 0:
+        return tables
+
+    sx = pdf_page.rect.width / width
+    sy = pdf_page.rect.height / height
+    return [
+        ((box[0] * sx, box[1] * sy, box[2] * sx, box[3] * sy), rows)
+        for box, rows in tables
+    ]
+
+
+# ---------------------------------------------------------------------------
+# PDF 解析器
+# ---------------------------------------------------------------------------
 @register_loader(".pdf")
 def _load_pdf(path: Path) -> list[Segment]:
-    """解析 PDF 正文，按页产出 Segment（对应 T-1.3 / FR-02）。
+    """解析 PDF 正文与表格，按页产出 Segment（对应 T-1.3 / T-1.4 / FR-02）。
 
-    为什么一页一个 Segment
-    ----------------------
+    输出结构
+    --------
+    每页最多产出两类 Segment：
+
+    - 正文：``kind=KIND_TEXT``，已剔除表格区域，避免与表格内容重复；
+    - 表格：``kind=KIND_TABLE``，Markdown 文本，整表一个 Segment（T-2.2 不再切分）。
+
+    为什么一页一个正文 Segment
+    --------------------------
     FR-06 / FR-09 要求回答能标注「第 x 页」。页码信息一旦在解析阶段被拍平，
     下游无论怎么切块都补不回来，所以这里按页保留边界，页码从 1 开始。
 
@@ -446,25 +634,26 @@ def _load_pdf(path: Path) -> list[Segment]:
     ----------------------
     - **只取文本层**：扫描件 / 纯图片页会得到空文本，由 :func:`load_document`
       统一告警（扫描件检测见 T-1.7），V1 不做 OCR；
+    - **只识别有框线的表格**：pdfplumber 默认按线条判断；无框线表格会留在正文里；
+    - **同页顺序不还原**：正文 Segment 在前，表格 Segment 在后，不按实际版式位置交错；
     - **不识别分栏**：双栏论文可能按页面几何顺序而非人类阅读顺序输出；
     - **图片公式会丢失**：PDF 中公式若为图片形式，V1 不做公式识别（FR-02 已注明）；
-    - **表格文字暂未分离**：本函数取的是整页文本流，表格内容会按阅读顺序混在正文里；
-      T-1.4 会用 pdfplumber 单独抽表，并负责把表格区域从正文中排除，避免同一张表入库两次。
+    - **旋转页面跳过表格抽取**：/Rotate 非 0 时两库坐标原点可能不一致，为避免误删正文，
+      该页退化为纯文本（表格文字仍保留在正文中）。
 
     Args:
         path: PDF 文件路径。
 
     Returns:
-        每页一个 Segment（``page`` 从 1 开始）。空白页也会保留，由
-        :func:`load_document` 在统一出口过滤。
+        正文 Segment + 表格 Segment（``page`` 从 1 开始）。
 
     Raises:
         ValueError: PDF 需要密码才能打开（不尝试破解）。
         pymupdf.FileDataError: 文件损坏或不是合法的 PDF。
 
     Note:
-        这里**延迟导入** ``pymupdf``：仅做格式判断或处理 TXT 时不必加载 PDF 引擎，
-        也让本模块在缺少 PDF 依赖时仍能被导入（例如只跑 TXT 相关测试）。
+        ``pymupdf`` 与 ``pdfplumber`` 都延迟导入：只做格式判断或处理 TXT 时
+        不必加载 PDF 引擎。表格引擎不可用时自动退化为纯文本，不影响正文入库。
     """
     import pymupdf
 
@@ -475,17 +664,50 @@ def _load_pdf(path: Path) -> list[Segment]:
         if doc.needs_pass and not doc.authenticate(""):
             raise ValueError("PDF 已加密，需先解除密码保护再导入")
 
-        for page in doc:
-            segments.append(
-                Segment(
-                    text=page.get_text("text"),
-                    # page.number 是 0 基索引，而展示给用户的「第 x 页」从 1 开始
-                    page=page.number + 1,
-                    kind=KIND_TEXT,
-                )
-            )
+        plumber_doc = None
+        try:
+            import pdfplumber
 
-    logger.debug("PDF 解析完成: {} -> {} 页", path.name, len(segments))
+            plumber_doc = pdfplumber.open(path)
+        except Exception as exc:  # noqa: BLE001 —— 表格引擎不可用时仍要能读正文
+            logger.warning("PDF 表格抽取不可用，退化为纯文本: {} ({})", path.name, exc)
+
+        try:
+            for page in doc:
+                page_no = page.number + 1
+                tables: list[tuple[TableBox, list[list[str | None]]]] = []
+
+                # /Rotate 非 0 时两库坐标原点可能不一致；跳过表格抽取，
+                # 宁可把表格文字留在正文里，也不要把正文误判成表格内容删掉。
+                can_read_tables = (
+                    plumber_doc is not None
+                    and page.rotation % 360 == 0
+                    and page.number < len(plumber_doc.pages)
+                )
+                if can_read_tables:
+                    try:
+                        plumber_page = plumber_doc.pages[page.number]
+                        tables = _extract_page_tables(plumber_page)
+                        tables = _scale_table_boxes(page, plumber_page, tables)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning("PDF 表格解析失败（第 {} 页）: {}", page_no, exc)
+
+                body = _page_text_excluding_tables(page, [box for box, _ in tables])
+                if body.strip():
+                    segments.append(Segment(text=body, page=page_no, kind=KIND_TEXT))
+
+                for _, rows in tables:
+                    markdown = _table_to_markdown(rows)
+                    if markdown:
+                        segments.append(Segment(text=markdown, page=page_no, kind=KIND_TABLE))
+
+                if tables:
+                    logger.debug("PDF 第 {} 页抽取到 {} 个表格", page_no, len(tables))
+        finally:
+            if plumber_doc is not None:
+                plumber_doc.close()
+
+    logger.debug("PDF 解析完成: {} -> {} 段", path.name, len(segments))
     return segments
 
 
