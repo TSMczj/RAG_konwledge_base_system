@@ -8,6 +8,7 @@ from __future__ import annotations
 import gc
 from pathlib import Path
 
+import pytest
 from langchain_core.embeddings import Embeddings
 
 from app.config import Settings
@@ -197,3 +198,145 @@ def test_qwen_embeddings_adapter_forwards() -> None:
 
     assert adapter.embed_documents(["a", "b"]) == [[1.0, 2.0], [1.0, 2.0]]
     assert adapter.embed_query("q") == [3.0, 4.0]
+
+
+class FailingEmbeddings(FakeEmbeddings):
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        raise RuntimeError("embedding down")
+
+
+def test_has_file_and_count_by_hash(tmp_path: Path) -> None:
+    store = VectorStore(
+        settings=_settings(tmp_path),
+        embedding_function=FakeEmbeddings(),
+    )
+    store.index_chunks([_chunk(0, "a", file_hash="hash-a")])
+
+    assert store.has_file("hash-a")
+    assert not store.has_file("hash-b")
+    assert store.count_by_file_hash("hash-a") == 1
+    assert store.count_by_file_hash("hash-b") == 0
+
+
+def test_index_skips_same_file_without_embedding(tmp_path: Path) -> None:
+    fake = FakeEmbeddings()
+    store = VectorStore(settings=_settings(tmp_path), embedding_function=fake)
+    chunks = [_chunk(0, "a"), _chunk(1, "b")]
+
+    first = store.index_chunks(chunks)
+    second = store.index_chunks(chunks)
+
+    assert not first.skipped and first.indexed == 2 and first.count_before == 0
+    assert second.skipped and second.indexed == 0 and second.count_before == 2
+    assert store.count() == 2
+    # 第二次应在嵌入之前就跳过，只产生一次嵌入调用
+    assert len(fake.doc_calls) == 1
+
+
+def test_index_skips_renamed_same_content(tmp_path: Path) -> None:
+    fake = FakeEmbeddings()
+    store = VectorStore(settings=_settings(tmp_path), embedding_function=fake)
+
+    store.index_chunks([_chunk(0, "a", source="old.pdf")])
+    result = store.index_chunks([_chunk(0, "a", source="new.pdf")])
+
+    assert result.skipped
+    assert store.count() == 1
+    assert len(fake.doc_calls) == 1
+
+
+def test_index_reindexes_partial_existing_chunks(tmp_path: Path) -> None:
+    store = VectorStore(
+        settings=_settings(tmp_path),
+        embedding_function=FakeEmbeddings(),
+    )
+    store.index_chunks([_chunk(0, "a")])
+
+    result = store.index_chunks([_chunk(0, "a"), _chunk(1, "b")])
+
+    assert not result.skipped
+    assert result.count_before == 1
+    assert store.count() == 2
+
+
+def test_index_removes_stale_chunks_after_rechunk(tmp_path: Path) -> None:
+    store = VectorStore(
+        settings=_settings(tmp_path),
+        embedding_function=FakeEmbeddings(),
+    )
+    store.index_chunks([_chunk(0, "a"), _chunk(1, "b"), _chunk(2, "c")])
+
+    result = store.index_chunks([_chunk(0, "a"), _chunk(1, "b")])
+
+    assert not result.skipped
+    assert store.count() == 2
+    remaining = store._collection.get()
+    assert sorted(remaining["ids"]) == ["hash-a-0", "hash-a-1"]
+
+
+def test_index_rejects_mixed_file_hashes(tmp_path: Path) -> None:
+    store = VectorStore(
+        settings=_settings(tmp_path),
+        embedding_function=FakeEmbeddings(),
+    )
+    with pytest.raises(ValueError, match="同一个文件"):
+        store.index_chunks(
+            [
+                _chunk(0, "a", file_hash="hash-a"),
+                _chunk(0, "b", file_hash="hash-b"),
+            ]
+        )
+    assert store.count() == 0
+
+
+def test_index_empty_chunks_is_noop(tmp_path: Path) -> None:
+    store = VectorStore(
+        settings=_settings(tmp_path),
+        embedding_function=FakeEmbeddings(),
+    )
+    result = store.index_chunks([])
+
+    assert result.file_hash == ""
+    assert result.indexed == 0
+    assert result.skipped
+    assert store.count() == 0
+
+
+def test_index_skip_existing_false_forces_rewrite(tmp_path: Path) -> None:
+    fake = FakeEmbeddings()
+    store = VectorStore(settings=_settings(tmp_path), embedding_function=fake)
+    chunks = [_chunk(0, "a")]
+
+    store.index_chunks(chunks)
+    result = store.index_chunks(chunks, skip_existing=False)
+
+    assert not result.skipped
+    assert result.indexed == 1
+    assert len(fake.doc_calls) == 2
+    assert store.count() == 1
+
+
+def test_index_embedding_failure_leaves_no_writes(tmp_path: Path) -> None:
+    store = VectorStore(
+        settings=_settings(tmp_path),
+        embedding_function=FailingEmbeddings(),
+    )
+    with pytest.raises(RuntimeError, match="embedding down"):
+        store.index_chunks([_chunk(0, "a")])
+
+    assert store.count() == 0
+    assert not store.has_file("hash-a")
+
+
+def test_modified_content_is_a_new_version(tmp_path: Path) -> None:
+    store = VectorStore(
+        settings=_settings(tmp_path),
+        embedding_function=FakeEmbeddings(),
+    )
+    store.index_chunks([_chunk(0, "old", file_hash="hash-a", source="a.pdf")])
+    store.index_chunks([_chunk(0, "new", file_hash="hash-b", source="a.pdf")])
+
+    # 内容变了就是新文件；旧版本不会自动删除（T-3.5 提供按文件删除）
+    assert store.has_file("hash-a")
+    assert store.has_file("hash-b")
+    assert store.count() == 2

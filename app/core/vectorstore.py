@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Sequence
 
@@ -36,6 +37,23 @@ from app.logging_config import logger
 
 #: collection 的相似度度量；首次创建时写入
 COSINE_METADATA = {"hnsw:space": "cosine"}
+
+
+@dataclass(frozen=True, slots=True)
+class IndexResult:
+    """单个文件一次索引操作的结果。
+
+    Attributes:
+        file_hash: 文件内容 SHA-256；空输入时为空串。
+        indexed: 本次实际写入/更新的 chunk 数。
+        skipped: 是否因为已存在相同文件而跳过。
+        count_before: 操作前该文件在库内的 chunk 数。
+    """
+
+    file_hash: str
+    indexed: int
+    skipped: bool
+    count_before: int
 
 
 class QwenEmbeddings(Embeddings):
@@ -127,22 +145,113 @@ class VectorStore:
         """当前 collection 的向量条数。"""
         return int(self._collection.count())
 
-    def upsert_chunks(self, chunks: Iterable[Chunk]) -> int:
-        """写入或更新一批 chunk，返回写入条数。
+    def has_file(self, file_hash: str) -> bool:
+        """该内容哈希是否已有 chunk 入库（T-3.3 幂等判断）。"""
+        return self.count_by_file_hash(file_hash) > 0
 
-        使用 ``chunk_id`` 作为向量 id，因此同一个 chunk 重复写入是幂等的；
-        真正的“同一文件是否已入库”判重由 T-3.3 负责。
+    def count_by_file_hash(self, file_hash: str) -> int:
+        """该文件当前在库内的 chunk 数。"""
+        return len(self._ids_where({"file_hash": file_hash}))
+
+    def index_chunks(
+        self,
+        chunks: Iterable[Chunk],
+        *,
+        skip_existing: bool = True,
+    ) -> IndexResult:
+        """索引一个文件的全部 chunk，并做内容哈希判重（对应 T-3.3 / FR-04）。
+
+        判重规则：
+
+        - 同一 ``file_hash`` 且 chunk id 集合完全一致 → 直接跳过，不调用嵌入接口；
+        - 库内已有该文件但 chunk 集合不一致（例如分块参数变了、上次留下部分数据）
+          → 重新写入全部 chunk，并删除该文件多余的旧 chunk；
+        - 文件内容改了 → ``file_hash`` 变了，视为新文件入库（旧版本需显式删除）；
+        - 同内容文件改名后仍会跳过，保留首次入库的 ``source_file``；要更新展示名
+          请先删除再导入。
+
+        嵌入在写入之前完成，嵌入失败不会留下半入库数据。
 
         Args:
-            chunks: :class:`~app.core.splitter.Chunk` 可迭代对象。
+            chunks: 同一个文件的全部 chunk；不能混合多个 ``file_hash``。
+            skip_existing: 为 True 时命中已有文件直接跳过；False 时强制重写。
 
         Returns:
-            实际提交的 chunk 数（空输入返回 0）。
+            :class:`IndexResult`，含是否跳过、写入条数、操作前数量。
+
+        Raises:
+            ValueError: 空输入的 file_hash 为空，或一次混入多个文件的 chunk。
+        """
+        items = list(chunks)
+        if not items:
+            return IndexResult(file_hash="", indexed=0, skipped=True, count_before=0)
+
+        hashes = {chunk.file_hash for chunk in items}
+        if len(hashes) != 1:
+            raise ValueError(
+                f"index_chunks 一次只能处理同一个文件的 chunk；收到 {len(hashes)} 个 file_hash"
+            )
+        file_hash = next(iter(hashes))
+        if not file_hash:
+            raise ValueError("chunk 缺少 file_hash，无法做幂等判重")
+
+        ids = [chunk.chunk_id for chunk in items]
+        existing_ids = self._ids_where({"file_hash": file_hash})
+
+        if skip_existing and set(existing_ids) == set(ids):
+            logger.info(
+                "文件已入库，跳过: {}（{} 个 chunk）",
+                file_hash[:12], len(items),
+            )
+            return IndexResult(
+                file_hash=file_hash,
+                indexed=0,
+                skipped=True,
+                count_before=len(existing_ids),
+            )
+
+        # 先算完全部向量再写；嵌入失败时库内数据保持不变
+        self._write_items(items)
+
+        # 分块参数变化/上次中断可能留下多余旧 chunk，按 id 精确清理
+        new_ids = set(ids)
+        stale_ids = [item for item in existing_ids if item not in new_ids]
+        if stale_ids:
+            self._collection.delete(ids=stale_ids)
+            logger.info("清理旧版本 chunk: {} 个", len(stale_ids))
+
+        logger.info(
+            "向量入库: {} 个 chunk（文件 {}，累计 {}）",
+            len(items), file_hash[:12], self.count(),
+        )
+        return IndexResult(
+            file_hash=file_hash,
+            indexed=len(items),
+            skipped=False,
+            count_before=len(existing_ids),
+        )
+
+    def upsert_chunks(self, chunks: Iterable[Chunk]) -> int:
+        """写入或更新一批 chunk（不做文件级判重），返回写入条数。
+
+        需要幂等导入时用 :meth:`index_chunks`；本方法只保证 ``chunk_id`` 级 upsert。
         """
         items = list(chunks)
         if not items:
             return 0
+        self._write_items(items)
+        logger.info("向量入库: {} 个 chunk（累计 {}）", len(items), self.count())
+        return len(items)
 
+    def add_chunks(self, chunks: Iterable[Chunk]) -> int:
+        """``upsert_chunks`` 的别名，便于按“添加”语义调用。"""
+        return self.upsert_chunks(chunks)
+
+    def _write_items(self, items: list[Chunk]) -> None:
+        """计算向量并一次性 upsert。
+
+        先算 embedding 再写库：嵌入失败不会产生任何写入。
+        """
         ids = [chunk.chunk_id for chunk in items]
         texts = [chunk.text for chunk in items]
         metadatas = [chunk.to_metadata() for chunk in items]
@@ -155,12 +264,6 @@ class VectorStore:
             documents=texts,
             metadatas=metadatas,
         )
-        logger.info("向量入库: {} 个 chunk（累计 {}）", len(items), self.count())
-        return len(items)
-
-    def add_chunks(self, chunks: Iterable[Chunk]) -> int:
-        """``upsert_chunks`` 的别名，便于按“添加”语义调用。"""
-        return self.upsert_chunks(chunks)
 
     def delete_by_ids(self, ids: Sequence[str]) -> int:
         """按向量 id 删除，返回请求删除的条数。"""
@@ -182,10 +285,14 @@ class VectorStore:
         """
         return self._delete_where({"source_file": source_file})
 
+    def _ids_where(self, where: dict) -> list[str]:
+        """按 metadata 条件取 id 列表。"""
+        found = self._collection.get(where=where)
+        return list(found.get("ids") or [])
+
     def _delete_where(self, where: dict) -> int:
         """按 metadata 条件删除，返回实际删除条数。"""
-        found = self._collection.get(where=where)
-        ids = list(found.get("ids") or [])
+        ids = self._ids_where(where)
         if ids:
             self._collection.delete(ids=ids)
         logger.info("按条件删除: {} -> {} 个 chunk", where, len(ids))
@@ -219,4 +326,10 @@ def get_vectorstore() -> VectorStore:
     return VectorStore()
 
 
-__all__ = ["COSINE_METADATA", "QwenEmbeddings", "VectorStore", "get_vectorstore"]
+__all__ = [
+    "COSINE_METADATA",
+    "IndexResult",
+    "QwenEmbeddings",
+    "VectorStore",
+    "get_vectorstore",
+]
