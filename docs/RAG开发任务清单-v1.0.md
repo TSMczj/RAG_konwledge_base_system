@@ -135,7 +135,7 @@
 
 ### 3.2 分块（FR-03）
 
-- [ ] **T-2.1 分块器** `M`
+- [x] **T-2.1 分块器** `M`
   - 交付：`app/core/splitter.py`
   - 要求：`RecursiveCharacterTextSplitter`，中文分隔符优先级 `\n\n → \n → 。 → ； → ！ → ？ → ，`，`chunk_size=500` / `overlap=80`（从配置读）
   - 依赖：T-1.1
