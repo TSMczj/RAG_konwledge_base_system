@@ -159,7 +159,7 @@
   - 依赖：T-0.3
   - 验收：输入 25 条文本，自动切成 3 批，全部返回 1024 维
 
-- [ ] **T-3.2 Chroma 封装** `M`
+- [x] **T-3.2 Chroma 封装** `M`
   - 交付：`app/core/vectorstore.py`
   - 要求：collection 创建、upsert、delete、query、**持久化到 `data/chroma/`**；相似度用 **cosine**
   - 依赖：T-0.2
