@@ -4,7 +4,8 @@
 ----
 把不同格式的文件统一抽成「分段列表 + 文档元数据」，供下游分块（T-2.x）使用。
 本模块**只负责按扩展名分发**，各格式的具体解析逻辑由 T-1.2 ~ T-1.5 逐步补上
-（TXT、PDF 正文与表格、Word 均已实现）。
+（TXT、PDF 正文与表格、Word 均已实现）。批量入口 :func:`load_documents` /
+:func:`load_directory`（T-1.6）负责逐文件解析并把失败汇总成清单，单个坏文件不中断整批。
 
 为什么返回「分段(Segment)」而不是一整段纯文本
 ---------------------------------------------
@@ -404,6 +405,162 @@ def load_document(path: str | Path) -> LoadedDocument:
         )
 
     return doc
+
+
+# ---------------------------------------------------------------------------
+# 批量解析（T-1.6）
+# ---------------------------------------------------------------------------
+@dataclass
+class BatchLoadResult:
+    """一次批量解析的汇总结果。
+
+    Attributes:
+        documents: 解析成功的文档（``ok=True``）；可能包含 0 段的空文本文档。
+        failures: 解析失败的文档（``ok=False``），``error`` 字段里是失败原因。
+        skipped: 未尝试解析的路径（扩展名不支持、Office 临时锁文件等）。
+    """
+
+    documents: list[LoadedDocument] = field(default_factory=list)
+    failures: list[LoadedDocument] = field(default_factory=list)
+    skipped: list[str] = field(default_factory=list)
+
+    @property
+    def total_files(self) -> int:
+        """本次批量涉及的文件总数（成功 + 失败 + 跳过）。"""
+        return len(self.documents) + len(self.failures) + len(self.skipped)
+
+    @property
+    def total_segments(self) -> int:
+        """成功文档的 Segment 总数。"""
+        return sum(len(doc.segments) for doc in self.documents)
+
+    @property
+    def total_chars(self) -> int:
+        """成功文档的正文字符总数。"""
+        return sum(doc.char_count for doc in self.documents)
+
+    @property
+    def empty_documents(self) -> list[LoadedDocument]:
+        """解析成功但一段都没抽到的文档（疑似扫描件 / 空文件）。"""
+        return [doc for doc in self.documents if not doc.segments]
+
+    def failure_lines(self) -> list[str]:
+        """把失败清单整理成「路径: 原因」的行，供 CLI / 日志输出。"""
+        return [f"{doc.file_path}: {doc.error}" for doc in self.failures]
+
+    def summary(self) -> str:
+        """一行汇总，便于 CLI 打印和日志打点。"""
+        text = (
+            f"成功 {len(self.documents)} 个（{self.total_segments} 段 / "
+            f"{self.total_chars} 字符），失败 {len(self.failures)} 个，"
+            f"跳过 {len(self.skipped)} 个"
+        )
+        empty = len(self.empty_documents)
+        if empty:
+            text += f"；其中 {empty} 个解析结果为空（疑似扫描件或缺文本层）"
+        return text
+
+
+def load_documents(paths: Iterable[str | Path]) -> BatchLoadResult:
+    """批量解析一组文件，单文件失败只记录、不中断整批（对应 T-1.6 / FR-02）。
+
+    对每个路径：
+
+    1. 跳过 Office 临时锁文件（``~$xxx.docx``）与不支持的扩展名，计入 ``skipped``；
+    2. 调用 :func:`load_document`；它本身设计为不抛异常，这里仍加一层 try/except 兜底；
+    3. 成功进 ``documents``，失败进 ``failures``，最后打印一行汇总。
+
+    Args:
+        paths: 文件路径的可迭代对象；也接受单个 ``str`` / ``Path``（会自动包成列表）。
+
+    Returns:
+        :class:`BatchLoadResult`，含成功文档、失败清单和跳过清单。
+
+    Note:
+        这里**不**对路径去重，也不改变调用方给的顺序；目录扫描由
+        :func:`load_directory` 负责排序，保证同一目录多次运行结果稳定。
+    """
+    if isinstance(paths, (str, Path)):
+        paths = [paths]
+
+    result = BatchLoadResult()
+
+    for raw in paths:
+        p = Path(raw)
+
+        # Word/Office 的临时锁文件以 ~$ 开头，扩展名可能仍是 .docx。
+        # 必须显式跳过，否则会被当成损坏文档记进失败清单，污染导入统计。
+        if p.name.startswith("~$"):
+            result.skipped.append(str(p))
+            logger.debug("跳过 Office 临时锁文件: {}", p.name)
+            continue
+
+        if not is_supported(p):
+            result.skipped.append(str(p))
+            logger.debug("跳过不支持的格式: {}", p.name)
+            continue
+
+        try:
+            doc = load_document(p)
+        except Exception as exc:  # noqa: BLE001 —— 双保险：load_document 设计上不抛
+            doc = LoadedDocument(
+                source_file=p.name,
+                file_path=str(p),
+                doc_type=_normalize_ext(p.suffix).lstrip("."),
+                error=f"{type(exc).__name__}: {exc}",
+            )
+            logger.warning("批量解析出现意外异常: {} -> {}", p.name, doc.error)
+
+        if doc.ok:
+            result.documents.append(doc)
+        else:
+            result.failures.append(doc)
+            # load_document 内部已经 warn 过一次，这里降为 debug，避免重复刷屏
+            logger.debug("批量解析失败: {} -> {}", p.name, doc.error)
+
+    logger.info("批量解析完成: {}", result.summary())
+    return result
+
+
+def load_directory(directory: str | Path, recursive: bool = False) -> BatchLoadResult:
+    """扫描目录并批量解析其中的文档（对应 T-1.6 / FR-01 目录导入）。
+
+    Args:
+        directory: 目录路径。
+        recursive: 是否递归子目录，默认只扫描一层。
+
+    Returns:
+        :class:`BatchLoadResult`。目录不存在时返回一个只含失败项的汇总，
+        而不是抛异常，方便 CLI 统一处理。
+
+    Note:
+        文件按路径字典序排序，保证同一目录多次扫描的块序稳定；
+        非目标扩展名由 :func:`load_documents` 静默跳过。
+    """
+    base = Path(directory)
+    if not base.is_dir():
+        result = BatchLoadResult()
+        result.failures.append(
+            LoadedDocument(
+                source_file=base.name,
+                file_path=str(base),
+                doc_type="",
+                error=f"目录不存在或不是目录: {base}",
+            )
+        )
+        logger.warning("批量解析目录无效: {}", base)
+        return result
+
+    pattern = "**/*" if recursive else "*"
+    candidates = sorted(
+        (p for p in base.glob(pattern) if p.is_file()),
+        key=lambda p: str(p).lower(),
+    )
+    logger.info(
+        "开始批量解析目录: {}（递归={}，候选文件 {} 个）",
+        base, recursive, len(candidates),
+    )
+    return load_documents(candidates)
 
 
 # ---------------------------------------------------------------------------
@@ -826,6 +983,7 @@ def _load_docx(path: Path) -> list[Segment]:
 
 
 __all__ = [
+    "BatchLoadResult",
     "KIND_TABLE",
     "KIND_TEXT",
     "LoadedDocument",
@@ -833,7 +991,9 @@ __all__ = [
     "Segment",
     "decode_text",
     "is_supported",
+    "load_directory",
     "load_document",
+    "load_documents",
     "normalize_text",
     "register_loader",
     "supported_extensions",
