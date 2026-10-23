@@ -21,13 +21,21 @@ PDF 的页码、Word/TXT 的 ``page=0`` 都挂在 Segment 上；拍平后再切�
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Iterable
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.config import get_settings
-from app.core.loader import KIND_TABLE, KIND_TEXT, LoadedDocument, Segment
+from app.core.loader import (
+    KIND_TABLE,
+    KIND_TEXT,
+    LoadedDocument,
+    Segment,
+    compute_file_hash,
+)
 from app.logging_config import logger
 
 #: 中文优先的分隔符：先按段落，再按句号 / 分号 / 叹号 / 问号 / 逗号降级；
@@ -47,6 +55,9 @@ class Chunk:
         doc_type: 文档类型（pdf / docx / txt）。
         page: 页码；PDF 从 1 开始，Word/TXT 为 0。
         chunk_index: 该文档内的块序号，从 0 开始。
+        file_hash: 原始文件内容的 SHA-256；手工构造文档缺失时用路径哈希兜底。
+        chunk_id: ``{file_hash}-{chunk_index}``，全局唯一。
+        created_at: 分块时间，ISO8601（UTC）。
         kind: ``text`` / ``table``；表格块整表保留。
     """
 
@@ -56,12 +67,32 @@ class Chunk:
     doc_type: str
     page: int
     chunk_index: int
+    file_hash: str
+    chunk_id: str
+    created_at: str
     kind: str = KIND_TEXT
 
     @property
     def char_count(self) -> int:
         """该 chunk 的字符数。"""
         return len(self.text)
+
+    def to_metadata(self) -> dict[str, str | int]:
+        """转成 Chroma 的 metadata（需求文档 §6.2 字段 + 内部 ``kind``）。
+
+        ``kind`` 不在 §6.2 的 8 个字段里，但表格块保护需要它；Chroma 允许附加字段。
+        """
+        return {
+            "source_file": self.source_file,
+            "file_path": self.file_path,
+            "file_hash": self.file_hash,
+            "doc_type": self.doc_type,
+            "page": self.page,
+            "chunk_index": self.chunk_index,
+            "chunk_id": self.chunk_id,
+            "created_at": self.created_at,
+            "kind": self.kind,
+        }
 
 
 def _build_splitter() -> RecursiveCharacterTextSplitter:
@@ -127,15 +158,46 @@ def _check_table_chunks(doc: LoadedDocument, chunks: list[Chunk]) -> None:
         )
 
 
+def _resolve_file_hash(doc: LoadedDocument) -> str:
+    """取文档内容哈希；手工构造的文档缺少哈希时用路径哈希兜底。
+
+    Args:
+        doc: 已解析文档。
+
+    Returns:
+        文件的 SHA-256。正常入库流程由 :func:`load_document` 预先算好；
+        手工构造 ``LoadedDocument`` 且文件不可读时，退化为路径哈希。
+    """
+    if doc.file_hash:
+        return doc.file_hash
+
+    try:
+        doc.file_hash = compute_file_hash(doc.file_path)
+        return doc.file_hash
+    except OSError:
+        # 文件已被移动/删除，或调用方手工构造了 LoadedDocument。
+        # 用路径哈希保证 chunk_id 稳定且不与其他文档冲突；这不是内容哈希，
+        # 真正的入库流程一定会先算好 file_hash。
+        logger.warning(
+            "文档缺少 file_hash 且无法读取原文件，chunk_id 使用路径哈希兜底: {}",
+            doc.source_file,
+        )
+        return hashlib.sha256(f"{doc.file_path}|{doc.source_file}".encode("utf-8")).hexdigest()
+
+
 def _split_document(
     doc: LoadedDocument,
     splitter: RecursiveCharacterTextSplitter,
 ) -> list[Chunk]:
     """切分单个已解析文档（内部函数，调用方需保证 ``doc.ok``）。"""
     chunks: list[Chunk] = []
+    file_hash = _resolve_file_hash(doc)
+    # 同一文档的所有 chunk 共享一个导入时间，便于按批次筛选
+    created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     for segment in doc.segments:
         for piece in _split_segment(segment, splitter):
+            index = len(chunks)
             chunks.append(
                 Chunk(
                     text=piece,
@@ -143,7 +205,10 @@ def _split_document(
                     file_path=doc.file_path,
                     doc_type=doc.doc_type,
                     page=segment.page,
-                    chunk_index=len(chunks),
+                    chunk_index=index,
+                    file_hash=file_hash,
+                    chunk_id=f"{file_hash}-{index}",
+                    created_at=created_at,
                     kind=segment.kind,
                 )
             )

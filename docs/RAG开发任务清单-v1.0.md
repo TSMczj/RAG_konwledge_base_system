@@ -146,7 +146,7 @@
   - 依赖：T-2.1、T-1.4
   - 验收：表格所在 chunk 未被切散
 
-- [ ] **T-2.3 元数据装配** `S`
+- [x] **T-2.3 元数据装配** `S`
   - 交付：每个 chunk 注入 `source_file`、`file_path`、`doc_type`、`page`、`chunk_index`、`chunk_id`、`file_hash`
   - 依赖：T-2.1
   - 验收：字段与需求文档 §6.2 Schema 完全一致

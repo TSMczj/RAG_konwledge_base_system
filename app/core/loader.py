@@ -41,6 +41,7 @@ FR-02 明确要求「单文件解析失败不阻断整批导入」。所以本�
 from __future__ import annotations
 
 import codecs
+import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -111,6 +112,8 @@ class LoadedDocument:
         doc_type: 文档类型，取扩展名去掉点，如 ``"pdf"`` / ``"docx"`` / ``"txt"``。
         segments: 解析出的分段列表；解析失败时为空列表。
         error: 失败原因；成功时为 ``None``。
+        file_hash: 文件内容的 SHA-256；文件不存在 / 格式不支持时为空。
+            用于幂等判重（T-3.3）与 chunk_id（T-2.3）。
     """
 
     source_file: str
@@ -118,6 +121,7 @@ class LoadedDocument:
     doc_type: str
     segments: list[Segment] = field(default_factory=list)
     error: str | None = None
+    file_hash: str = ""
 
     @property
     def ok(self) -> bool:
@@ -262,6 +266,27 @@ def normalize_text(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
+def compute_file_hash(path: str | Path) -> str:
+    """计算文件内容的 SHA-256（用于幂等判重与 ``chunk_id``）。
+
+    以 1 MB 分块读取，避免把大 PDF 一次性读进内存。
+
+    Args:
+        path: 文件路径。
+
+    Returns:
+        64 位十六进制 SHA-256。
+
+    Raises:
+        OSError: 文件不存在或不可读。
+    """
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as fh:
+        for block in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
 # ---------------------------------------------------------------------------
 # 解析器注册表
 # ---------------------------------------------------------------------------
@@ -373,6 +398,15 @@ def load_document(path: str | Path) -> LoadedDocument:
         doc.error = f"不支持的格式 {_normalize_ext(p.suffix) or '(无扩展名)'}；当前已支持: {supported}"
         # 用 debug 而不是 warning：批量导入时非目标文件很多，不该刷屏（FR-01 要求静默跳过）
         logger.debug("跳过不支持的格式: {} ({})", p.name, doc.error)
+        return doc
+
+    # 文件哈希用于幂等判重（T-3.3）与 chunk_id（T-2.3）。
+    # 只对已注册格式计算，避免为无关文件做无谓 I/O；哈希失败直接判失败。
+    try:
+        doc.file_hash = compute_file_hash(p)
+    except OSError as exc:
+        doc.error = f"计算文件哈希失败: {type(exc).__name__}: {exc}"
+        logger.warning("计算文件哈希失败: {} -> {}", p.name, doc.error)
         return doc
 
     # ---- 情况 3：解析 ----
@@ -1053,6 +1087,7 @@ __all__ = [
     "LoadedDocument",
     "LoaderFunc",
     "Segment",
+    "compute_file_hash",
     "decode_text",
     "is_supported",
     "load_directory",
