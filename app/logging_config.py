@@ -108,7 +108,9 @@ def setup_logging(level: str | None = None) -> None:
         rotation="10 MB",
         retention="7 days",
         compression="zip",
-        enqueue=True,
+        # 单进程本地应用不需要跨进程日志队列；enqueue=True 会启用 multiprocessing
+        # 队列（Windows 命名管道），在受限沙箱/部分环境下创建管道会被拒绝。
+        enqueue=False,
         backtrace=True,
         diagnose=False,
     )
