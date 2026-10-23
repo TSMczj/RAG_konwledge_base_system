@@ -774,6 +774,65 @@ def _scale_table_boxes(
 
 
 # ---------------------------------------------------------------------------
+# 扫描件检测（T-1.7）
+# ---------------------------------------------------------------------------
+#: 无文本页占比达到这个值就告警。取 50% 是保守阈值：
+#: 正常电子书偶尔有空白页/整页插图，不应因此报警；
+#: 超过一半页面抽不出文字，基本可判定文本层缺失（扫描件 / 图片版 PDF）。
+_SCAN_EMPTY_PAGE_RATIO = 0.5
+
+
+def _pages_with_text(segments: Iterable[Segment]) -> set[int]:
+    """返回至少产出一个非空 Segment 的页码集合（正文或表格都算有文本层）。"""
+    return {
+        seg.page
+        for seg in segments
+        if seg.page > 0 and seg.text.strip()
+    }
+
+
+def _empty_text_pages(total_pages: int, segments: Iterable[Segment]) -> list[int]:
+    """列出没有任何可抽取文本的页码（1 基）。"""
+    if total_pages <= 0:
+        return []
+    with_text = _pages_with_text(segments)
+    return [page for page in range(1, total_pages + 1) if page not in with_text]
+
+
+def _warn_if_suspected_scan(
+    path: Path,
+    total_pages: int,
+    segments: Iterable[Segment],
+) -> bool:
+    """文本层覆盖率过低时告警，并返回是否判定为疑似扫描件（对应 T-1.7 / R1）。
+
+    Args:
+        path: PDF 路径（只用于日志）。
+        total_pages: PDF 总页数。
+        segments: 已解析出的 Segment；正文与表格都算有文本层。
+
+    Returns:
+        触发告警返回 ``True``，否则 ``False``。
+
+    Note:
+        只告警、不判失败：扫描件是否跳过取决于业务（T-1.7 只负责让问题可见）。
+    """
+    empty_pages = _empty_text_pages(total_pages, segments)
+    if not total_pages or len(empty_pages) / total_pages < _SCAN_EMPTY_PAGE_RATIO:
+        return False
+
+    preview = "、".join(str(page) for page in empty_pages[:10])
+    if len(empty_pages) > 10:
+        preview += " 等"
+    logger.warning(
+        "PDF 疑似扫描件：{} 页中 {} 页没有可抽取文本（无文本页：{}；"
+        "V1 不支持 OCR，这些页不会入库）: {}",
+        total_pages, len(empty_pages), preview, path.name,
+    )
+    return True
+
+
+# ---------------------------------------------------------------------------
 # PDF 解析器
 # ---------------------------------------------------------------------------
 @register_loader(".pdf")
@@ -794,8 +853,10 @@ def _load_pdf(path: Path) -> list[Segment]:
 
     已知限制（V1 明确接受）
     ----------------------
-    - **只取文本层**：扫描件 / 纯图片页会得到空文本，由 :func:`load_document`
-      统一告警（扫描件检测见 T-1.7），V1 不做 OCR；
+    - **只取文本层**：扫描件 / 纯图片页会得到空文本，V1 不做 OCR；
+    - **扫描件告警**：无文本页占比 ≥ 50% 时由 :func:`_warn_if_suspected_scan`
+      记录 warning（T-1.7），但**不判失败**——是否跳过由调用方决定；
+    - **可能漏报**：带少量文字水印的扫描页仍会被算作「有文本层」，阈值只做整篇粗判；
     - **只识别有框线的表格**：pdfplumber 默认按线条判断；无框线表格会留在正文里；
     - **同页顺序不还原**：正文 Segment 在前，表格 Segment 在后，不按实际版式位置交错；
     - **不识别分栏**：双栏论文可能按页面几何顺序而非人类阅读顺序输出；
@@ -868,6 +929,9 @@ def _load_pdf(path: Path) -> list[Segment]:
         finally:
             if plumber_doc is not None:
                 plumber_doc.close()
+
+        # T-1.7：整篇解析完再做一次文本层覆盖率检查
+        _warn_if_suspected_scan(path, doc.page_count, segments)
 
     logger.debug("PDF 解析完成: {} -> {} 段", path.name, len(segments))
     return segments
