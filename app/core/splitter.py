@@ -27,7 +27,7 @@ from typing import Iterable
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.config import get_settings
-from app.core.loader import KIND_TABLE, KIND_TEXT, LoadedDocument
+from app.core.loader import KIND_TABLE, KIND_TEXT, LoadedDocument, Segment
 from app.logging_config import logger
 
 #: 中文优先的分隔符：先按段落，再按句号 / 分号 / 叹号 / 问号 / 逗号降级；
@@ -81,6 +81,52 @@ def _build_splitter() -> RecursiveCharacterTextSplitter:
     )
 
 
+def _split_segment(
+    segment: Segment,
+    splitter: RecursiveCharacterTextSplitter,
+) -> list[str]:
+    """把一个 Segment 切成文本片段。
+
+    表格 Segment **永远整表返回**：不调用 splitter，哪怕长度超过 ``chunk_size``。
+    表头和数据行一旦被切开，检索召回的会是缺列 / 缺行的残表，比召回不到更糟。
+
+    Args:
+        segment: 待切分的 Segment。
+        splitter: 已按配置构造好的分块器。
+
+    Returns:
+        非空的文本片段列表；表格 Segment 只返回一个元素。
+    """
+    text = segment.text.strip()
+    if not text:
+        return []
+
+    if segment.kind == KIND_TABLE:
+        logger.debug("表格块整表保留: page={} 长度={}", segment.page, len(text))
+        return [text]
+
+    return [piece.strip() for piece in splitter.split_text(text) if piece.strip()]
+
+
+def _check_table_chunks(doc: LoadedDocument, chunks: list[Chunk]) -> None:
+    """校验表格保护的不变量：表格 Segment 与表格 chunk 一一对应且文本不变。
+
+    这是一个「防御性断言」：正常情况下永远成立；一旦将来有人改动切分逻辑
+    把表格切散，这里会留下 warning，而不是等检索质量下降后再回头排查。
+    """
+    expected = [
+        seg.text.strip()
+        for seg in doc.segments
+        if seg.kind == KIND_TABLE and seg.text.strip()
+    ]
+    actual = [chunk.text for chunk in chunks if chunk.kind == KIND_TABLE]
+    if expected != actual:
+        logger.warning(
+            "表格块保护校验失败: {} 个表格 Segment -> {} 个表格 chunk（文档 {}）",
+            len(expected), len(actual), doc.source_file,
+        )
+
+
 def _split_document(
     doc: LoadedDocument,
     splitter: RecursiveCharacterTextSplitter,
@@ -89,18 +135,7 @@ def _split_document(
     chunks: list[Chunk] = []
 
     for segment in doc.segments:
-        text = segment.text.strip()
-        if not text:
-            continue
-
-        # 表格 Segment 整表保留：切散后表头与数据行分离，检索会拿到残缺表格。
-        # T-2.2 会在此之上补显式验收，保护逻辑本身先落在这里。
-        pieces = [text] if segment.kind == KIND_TABLE else splitter.split_text(text)
-
-        for piece in pieces:
-            piece = piece.strip()
-            if not piece:
-                continue
+        for piece in _split_segment(segment, splitter):
             chunks.append(
                 Chunk(
                     text=piece,
@@ -113,6 +148,7 @@ def _split_document(
                 )
             )
 
+    _check_table_chunks(doc, chunks)
     logger.debug("分块完成: {} -> {} 个 chunk", doc.source_file, len(chunks))
     return chunks
 
