@@ -190,6 +190,7 @@ def test_cli_main_wires_arguments(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 
     monkeypatch.setattr(build_module, "get_settings", lambda: settings)
     monkeypatch.setattr(build_module, "VectorStore", lambda settings=None: store)
+    monkeypatch.setattr(build_module, "setup_logging", lambda: None)
 
     code = build_module.main(["--dir", str(uploads)])
 

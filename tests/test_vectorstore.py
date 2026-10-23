@@ -340,3 +340,46 @@ def test_modified_content_is_a_new_version(tmp_path: Path) -> None:
     assert store.has_file("hash-a")
     assert store.has_file("hash-b")
     assert store.count() == 2
+
+
+def test_list_files_groups_by_hash(tmp_path: Path) -> None:
+    store = VectorStore(
+        settings=_settings(tmp_path),
+        embedding_function=FakeEmbeddings(),
+    )
+    store.index_chunks(
+        [
+            _chunk(0, "a0", source="a.pdf", file_hash="hash-a", page=1),
+            _chunk(1, "a1", source="a.pdf", file_hash="hash-a", page=2),
+        ]
+    )
+    store.index_chunks(
+        [_chunk(0, "b0", source="b.pdf", file_hash="hash-b", page=0)]
+    )
+
+    files = store.list_files()
+
+    assert len(files) == 2
+    by_hash = {item.file_hash: item for item in files}
+    assert by_hash["hash-a"].source_file == "a.pdf"
+    assert by_hash["hash-a"].chunks == 2
+    assert by_hash["hash-a"].pages == 2
+    assert by_hash["hash-b"].chunks == 1
+    assert by_hash["hash-b"].pages == 0
+    assert by_hash["hash-a"].created_at.startswith("2026-10-23")
+
+
+def test_delete_all_clears_collection_but_keeps_it_usable(tmp_path: Path) -> None:
+    store = VectorStore(
+        settings=_settings(tmp_path),
+        embedding_function=FakeEmbeddings(),
+    )
+    store.index_chunks([_chunk(0, "a"), _chunk(1, "b")])
+
+    assert store.delete_all() == 2
+    assert store.count() == 0
+    assert store.list_files() == []
+
+    store.index_chunks([_chunk(0, "c", file_hash="hash-c")])
+    assert store.count() == 1
+    assert store.has_file("hash-c")

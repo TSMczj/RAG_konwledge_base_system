@@ -56,6 +56,29 @@ class IndexResult:
     count_before: int
 
 
+@dataclass(frozen=True, slots=True)
+class IndexedFile:
+    """已入库文件的聚合信息（供索引管理 CLI 列表展示）。
+
+    Attributes:
+        file_hash: 文件内容 SHA-256。
+        source_file: 原始文件名。
+        file_path: 原始文件路径。
+        doc_type: pdf / docx / txt。
+        chunks: 该文件在库内的 chunk 数。
+        pages: 有文本的页码最大值；TXT / Word 为 0。
+        created_at: 首次入库时间（ISO8601）。
+    """
+
+    file_hash: str
+    source_file: str
+    file_path: str
+    doc_type: str
+    chunks: int
+    pages: int
+    created_at: str
+
+
 class QwenEmbeddings(Embeddings):
     """把 :class:`QwenEmbedder` 适配成 LangChain ``Embeddings`` 接口。
 
@@ -144,6 +167,59 @@ class VectorStore:
     def count(self) -> int:
         """当前 collection 的向量条数。"""
         return int(self._collection.count())
+
+    def list_files(self) -> list[IndexedFile]:
+        """按 ``file_hash`` 聚合已入库文件（供索引管理列表展示）。"""
+        result = self._collection.get(include=["metadatas"])
+        metadatas = result.get("metadatas") or []
+
+        groups: dict[str, dict] = {}
+        for meta in metadatas:
+            if not meta:
+                continue
+            key = meta.get("file_hash") or f"src:{meta.get('source_file', '')}"
+            group = groups.get(key)
+            if group is None:
+                group = {
+                    "file_hash": meta.get("file_hash", ""),
+                    "source_file": meta.get("source_file", ""),
+                    "file_path": meta.get("file_path", ""),
+                    "doc_type": meta.get("doc_type", ""),
+                    "chunks": 0,
+                    "pages": set(),
+                    "created_at": meta.get("created_at", "") or "",
+                }
+                groups[key] = group
+
+            group["chunks"] += 1
+            page = meta.get("page", 0)
+            if isinstance(page, int) and page > 0:
+                group["pages"].add(page)
+
+        files = [
+            IndexedFile(
+                file_hash=group["file_hash"],
+                source_file=group["source_file"],
+                file_path=group["file_path"],
+                doc_type=group["doc_type"],
+                chunks=group["chunks"],
+                pages=max(group["pages"]) if group["pages"] else 0,
+                created_at=group["created_at"],
+            )
+            for group in groups.values()
+        ]
+        return sorted(files, key=lambda item: (item.source_file.lower(), item.file_hash))
+
+    def delete_all(self) -> int:
+        """清空当前 collection 的全部向量，返回删除条数。
+
+        保留 collection 本身（以及 cosine 配置），便于重建后继续复用同一个实例。
+        """
+        ids = list(self._collection.get().get("ids") or [])
+        if ids:
+            self._collection.delete(ids=ids)
+        logger.info("清空 collection: {} 个 chunk", len(ids))
+        return len(ids)
 
     def has_file(self, file_hash: str) -> bool:
         """该内容哈希是否已有 chunk 入库（T-3.3 幂等判断）。"""
@@ -329,6 +405,7 @@ def get_vectorstore() -> VectorStore:
 __all__ = [
     "COSINE_METADATA",
     "IndexResult",
+    "IndexedFile",
     "QwenEmbeddings",
     "VectorStore",
     "get_vectorstore",

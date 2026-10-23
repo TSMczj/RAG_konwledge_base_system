@@ -127,7 +127,7 @@ def build_index(
     return stats
 
 
-def _print_summary(stats: BuildStats, store: VectorStore) -> None:
+def print_summary(stats: BuildStats, store: VectorStore) -> None:
     """打印建库汇总与失败清单。"""
     print()
     print("=" * 64)
@@ -208,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         store=store,
         settings=settings,
     )
-    _print_summary(stats, store)
+    print_summary(stats, store)
 
     return 0 if not stats.failures and stats.index_failed == 0 else 1
 
