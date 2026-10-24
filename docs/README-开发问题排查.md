@@ -31,14 +31,15 @@
 - HNSW `data_level0.bin`、`header.bin`、`length.bin`、`link_lists.bin` 均已落盘，**新进程**可正常 `list` / `query`。
 - 真实表格：技术参数 1 张、lm358 55 张、TSLA 55 张、handbook 2 张；attention 的 6 张假表已清零。
 - 20 个随机 chunk 无单词/句子中间截断；损坏文件不中断同批解析；纯图片扫描件有告警。
-- `--rebuild` 在独立小 collection 上验证通过；主库全量重建因额度接近用完暂缓。
+- `--rebuild` 在主库全量执行通过：4021 → 4021，耗时 369s；独立小 collection 也已验证。
+- 充值额度后完成 M1 出口验收；War and Peace 不在 `data/uploads`，未参与嵌入。
 
 已知限制（不是“已解决”，不要误读）：
 
 - BERT 第 3/15/16 页的结构图仍有 6 个图注碎片被识别成表格。
 - 双栏 PDF 的阅读顺序仍可能交错，行拼接只能解决“行内截断”，不能重建版面。
 - V1 不做 OCR，纯扫描件解析为空。
-- 主库全量 `--rebuild` 尚未执行，T-3.6 只能算**部分验收**。
+- Chroma 仍依赖 ASCII 路径联接；换机器/迁移时必须重建联接。
 
 ---
 
@@ -92,7 +93,7 @@
 | PDF-03 | 注意力图/结构图被识别成表格 | 假表格污染检索 | pdfplumber 只按线条检测，图也有线条 | 部分修复（attention 清零；BERT 6 个已知） |
 | VEC-01 | `count()` 正常，重启报 HNSW 加载失败 | 索引不可用 | Chroma 1.5.9 在中文路径下不写 HNSW `.bin` | 已修复（ASCII 目录联接） |
 | VEC-02 | 客户端未关闭 / API 不兼容 | HNSW 可能未完整落盘；调用报错 | Chroma 客户端需显式 close；langchain-chroma 无公开 upsert/count | 已修复 |
-| QUOTA-01 | 1M 嵌入额度接近用完 | 不能反复全量重建 | 多次修复重建 + `--rebuild` 重复嵌入 | 已控制（全量重建待额度） |
+| QUOTA-01 | 1M 嵌入额度接近用完 | 不能反复全量重建 | 多次修复重建 + `--rebuild` 重复嵌入 | 已解决（充值后全量重建 4021→4021） |
 | MODEL-01 | DeepSeek 默认思考模式 | 响应慢、token 高、小 `max_tokens` 正文为空 | `deepseek-v4-flash` 默认返回 `reasoning_content` | 已知，T-4.4 处理 |
 | TEST-01 | 测试夹具与真实契约不一致 | 误报代码 bug | 合成表格行数不对；`hash-a` 不是 64 位十六进制 | 已修复 |
 | BUILD-01 | 后台建库“退出码 1” | 误判建库失败并重跑 | PowerShell 把 stderr 包装成 NativeCommandError；stdout 被缓冲 | 已规避 |
@@ -622,7 +623,8 @@ Chroma 1.5.9 的 HNSW 索引 sidecar 文件在**非 ASCII 路径**下没有正�
 - 最初 10 份文档估算约 127 万 token，超过额度；
 - 移除 War and Peace（约 87 万）后，9 份约 40 万；
 - 但本轮为修 HNSW 路径、表格误判、PDF 行截断，多次重建，额度迅速接近用完；
-- 主库全量 `--rebuild` 预计还要约 40 万，暂不能执行。
+- 主库全量 `--rebuild` 预计还要约 40 万，当时暂不能执行；
+- 充值额度后已执行全量重建：4021 → 4021，耗时 369s。
 
 #### 分析过程
 
@@ -631,7 +633,8 @@ Chroma 1.5.9 的 HNSW 索引 sidecar 文件在**非 ASCII 路径**下没有正�
 3. 发现 `build_index` 本身按 `file_hash` 跳过已存在文件，重复运行不花钱；
 4. 但 `--force` / `--rebuild` 会重新解析、重新嵌入，是纯消耗；
 5. 修改 loader/splitter 后，chunk 数变化会导致 `index_chunks` 重写该文件，这也需要预算；
-6. 因此最后只对受影响文档做删除/重索引，不做全量重建。
+6. 因此修复期间只对受影响文档做删除/重索引，不做全量重建；
+7. 额度恢复后再执行一次主库全量 `--rebuild`，作为 T-3.6 的最终验收。
 
 #### 根因
 
@@ -644,13 +647,14 @@ Chroma 1.5.9 的 HNSW 索引 sidecar 文件在**非 ASCII 路径**下没有正�
 - 日常增量建库依赖 `file_hash` 跳过；
 - 只对受影响的文件 `delete_by_file_hash` + 重新建库；
 - 修 loader/splitter 后先在本地 `load_document + split_document` 看 chunk 数，再决定是否入库；
-- 全量 `--rebuild` 留到额度恢复后。
+- 额度恢复后执行主库全量 `--rebuild`，一次性验证“清空 → 重新解析 → 重新嵌入 → 数量一致”。
 
 #### 验证
 
 - 增量建库：`扫描 11 / 解析成功 10 / 新入库 2 / 已存在跳过 8`；
 - 只重建 attention：`新入库 1 / 已存在跳过 7 / 写入 96`；
 - 最终主库 10 文件 / 4021 chunk；
+- 主库全量 `--rebuild`：清空 4021 → 重新写入 4021，耗时 369s，退出码 0；
 - 独立小 collection 的 `--rebuild` 2 → 2 通过。
 
 #### 经验
@@ -826,7 +830,7 @@ PowerShell 下跑 Python CLI，优先 `python -u` + 文件重定向；退出码�
 | 扫描件 | 有“疑似扫描件/无文本层”告警，不中断 |
 | 删除/重索引 | attention、个人信息保护法均验证 |
 | 独立 collection `--rebuild` | 2 → 2 |
-| 主库全量 `--rebuild` | **未执行**（额度） |
+| 主库全量 `--rebuild` | **已完成：4021 → 4021，369s，退出码 0** |
 
 ### 5.4 怎么复现验证
 
@@ -867,9 +871,9 @@ Get-ChildItem data\chroma -Recurse -File |
 | 双栏 PDF 阅读顺序 | 行内截断已修，跨栏仍可能交错 | 后续可评估版面分析或按 block 排序 |
 | 纯图片扫描件 | 无文本层，空结果 + 告警 | V1 不做 OCR；需要时单独接 OCR |
 | Chroma 中文路径 | 用 ASCII 目录联接规避 | 换机器/迁移时必须重建联接 |
-| 1M 嵌入额度 | 主库全量重建未执行 | 额度恢复后补 T-3.6 全量 `--rebuild` |
+| 1M 嵌入额度 | 已充值并完成全量重建（4021→4021） | 后续按需重建，仍不反复 `--force` / `--rebuild` |
 | DeepSeek 思考模式 | 尚未在生成客户端关闭 | T-4.4 显式关闭或接受开销 |
-| T-3.6 任务状态 | 部分验收 | 全量重建后勾选，并更新 README 进度 |
+| T-3.6 任务状态 | 已完成（M1 出口验收） | 后续进入 Sprint 2 · T-4.1 |
 
 ---
 
