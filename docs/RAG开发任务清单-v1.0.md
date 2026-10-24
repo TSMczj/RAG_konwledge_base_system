@@ -211,7 +211,7 @@
   - 依赖：T-4.2
   - 验收：塞入超长上下文不报错，自动截断
 
-- [ ] **T-4.4 DeepSeek 流式客户端** `M` （FR-08）
+- [x] **T-4.4 DeepSeek 流式客户端** `M` （FR-08）
   - 交付：`app/core/llm.py`
   - 要求：`deepseek-v4-flash`、OpenAI 兼容接口、**流式输出**、`temperature=0.2`、超时与重试
   - 依赖：T-0.3
