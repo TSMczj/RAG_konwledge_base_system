@@ -4,10 +4,12 @@
 | -------- | --------------- |
 | **文档版本** | v1.0            |
 | **创建日期** | 2026-10-13      |
-| **文档状态** | 待评审             |
+| **文档状态** | V1 核心已实现（M1/M2 完成；M3 进行中） |
 | **目标读者** | 开发者本人（单用户）      |
 | **项目代号** | `local-rag`     |
 | **部署形态** | 本地运行，不上线、不对公网暴露 |
+
+> **事实源说明**：本文只定义**产品范围、FR/NFR 和验收标准**。具体路由/字段/SSE/错误以 [API 契约](API契约-v1.0.md) 为准；架构决策以 [架构演进设计](架构演进设计.md) 为准；任务状态以 [开发任务清单](RAG开发任务清单-v1.0.md) 为准。本文不再复制这些细节。
 
 > **一句话目标**：在本地用 LangChain 搭一套 RAG 问答系统——把 PDF / Word / TXT 导入知识库，提问时用向量检索召回原文片段，交给大模型生成**带出处**的回答，并通过浏览器页面使用。
 
@@ -349,20 +351,21 @@ flowchart LR
 
 ### FR-12 HTTP API　`M`
 
-**描述**：提供 REST 接口，并自动生成 Swagger 文档。
+**描述**：提供 REST + SSE 接口，并自动生成 Swagger 文档。
 
-| 方法       | 路径                      | 说明        |
-| -------- | ----------------------- | --------- |
-| `POST`   | `/api/chat`             | 提问，返回流式回答 |
-| `POST`   | `/api/documents/upload` | 上传文档      |
-| `GET`    | `/api/documents`        | 文档列表      |
-| `DELETE` | `/api/documents/{id}`   | 删除文档      |
-| `POST`   | `/api/index/rebuild`    | 重建索引      |
-| `GET`    | `/api/health`           | 健康检查      |
+**能力范围**：
+
+- 聊天流式回答；
+- 文档上传、列表、软删除、恢复、彻底删除；
+- 索引重建；
+- 健康检查。
+
+具体路径、字段、SSE 事件顺序、错误码和 job 状态机，以 [API 契约](API契约-v1.0.md) 为唯一来源；本文不再维护路由表。
 
 **验收标准**：
 
-- [ ] `/docs` 可打开，所有接口可在 Swagger 中调通。
+- [ ] 浏览器打开 `/docs`，所有已实现接口可在 Swagger 中调通。
+- [ ] 前端按 API 契约接入，不依赖本文的路径描述。
 
 ---
 
@@ -395,7 +398,8 @@ flowchart LR
 
 ### NFR-4 安全与隐私
 
-- API Key 仅存于 `.env`，**禁止写入代码或提交仓库**（`.gitignore` 必须包含 `.env`）。
+- API Key **不写入代码、不提交仓库**；当前 V1 从操作系统环境变量读取（`DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY`）。
+- 本地分发版目标：Windows DPAPI / keyring 保存；服务器模式：每用户加密密钥库。具体实现边界见 [架构演进设计](架构演进设计.md)，接口见 [API 契约](API契约-v1.0.md)。
 - 服务仅绑定 `127.0.0.1`，不监听 `0.0.0.0`。
 - 数据流向说明：文档原文留在本机；仅 **chunk 文本片段**会发送至 Qwen（嵌入）和 DeepSeek（生成）——需使用者知情。
 
@@ -486,48 +490,15 @@ flowchart TB
 | `MAX_HISTORY_TURNS`    | 5                   | `.env`              |
 | `CHROMA_DIR`           | `./data/chroma`     | `.env`              |
 
-### 5.4 建议目录结构
+### 5.4 目录分层约定
 
-```
-local-rag/
-├── app/
-│   ├── main.py                 # FastAPI 入口，挂载路由与模板
-│   ├── config.py               # pydantic-settings 读取 .env
-│   ├── api/
-│   │   ├── chat.py             # /api/chat
-│   │   └── documents.py        # /api/documents*、/api/index/rebuild
-│   ├── core/
-│   │   ├── loader.py           # 文档解析（pdf/docx/txt）
-│   │   ├── splitter.py         # 分块
-│   │   ├── embedder.py         # Qwen 向量化（含分批）
-│   │   ├── vectorstore.py      # Chroma 封装（增删查）
-│   │   ├── retriever.py        # Top-K 检索
-│   │   ├── rewriter.py         # 多轮查询改写
-│   │   ├── prompt.py           # 提示词模板
-│   │   └── llm.py              # DeepSeek 调用（流式）
-│   ├── models/
-│   │   └── schemas.py          # Pydantic 请求/响应模型
-│   ├── templates/
-│   │   ├── base.html
-│   │   ├── index.html          # 聊天页
-│   │   └── documents.html      # 文档管理页
-│   └── static/                 # css/js
-├── data/
-│   ├── uploads/                # 原始文档
-│   ├── chroma/                 # 向量库持久化
-│   └── chat.db                 # 会话历史（可选）
-├── logs/
-├── tests/
-│   ├── test_loader.py
-│   ├── test_splitter.py
-│   ├── test_retriever.py
-│   └── test_api.py
-├── .env.example
-├── .gitignore                  # 必须含 .env、data/、logs/
-├── requirements.txt
-├── README.md
-└── start.ps1 / start.sh
-```
+- `app/api/`：HTTP 路由与 SSE；
+- `app/core/`：解析、分块、嵌入、向量库、检索、提示词、生成；
+- `app/services/`：文档管理/后台任务等编排；
+- `templates/`：Jinja2 页面；`app/static/`：静态资源；
+- `data/`、`logs/`、`tests/`、`scripts/`：数据、日志、测试、CLI。
+
+精确文件结构以代码与 README 为准；本文不维护逐文件树，避免与实现漂移。
 
 ---
 
@@ -537,10 +508,12 @@ local-rag/
 
 ```dotenv
 # ===== 云端模型凭证 =====
-DEEPSEEK_API_KEY=sk-xxxxxxxx
+# Key 不写入 .env；从操作系统环境变量读取：
+# DEEPSEEK_API_KEY / DASHSCOPE_API_KEY
+# 缺失 Key 时启动会给出配置提示，而不是静默失败
+
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 
-DASHSCOPE_API_KEY=sk-xxxxxxxx
 # 新加坡地域（按实际业务空间 ID 替换 {WorkspaceId}）
 DASHSCOPE_BASE_URL=https://{WorkspaceId}.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1
 
@@ -564,6 +537,8 @@ UPLOAD_DIR=./data/uploads
 COLLECTION_NAME=knowledge_base
 ```
 
+> `.env` 只放非敏感参数；Key 不进 `.env`。变量清单以 `.env.example` 与实际 `app/config.py` 为准。
+
 ### 6.2 向量元数据 Schema（Chroma metadata）
 
 | 字段            | 类型  | 说明                               |
@@ -572,9 +547,12 @@ COLLECTION_NAME=knowledge_base
 | `file_path`   | str | 原始文件路径                           |
 | `file_hash`   | str | 内容 SHA-256，用于幂等判重                |
 | `doc_type`    | str | `pdf` / `docx` / `txt`           |
-| `page`        | int | 页码（txt 为 0）                      |
+| `page`        | int | 页码（txt / Word 为 0）                |
 | `chunk_index` | int | 该文件内块序号                          |
-| `chunk_id`    | str | `{file_hash}-{chunk_index}` 全局唯一 |
+| `chunk_id`    | str | `{file_hash}-{chunk_index}` 当前唯一 ID |
+| `kind`        | str | `text` / `table`                  |
+| `tenant_id`   | str | 本地固定 `local`；服务器按租户隔离             |
+| `active`      | bool | 软删除标记；`False` 时不参与检索              |
 | `created_at`  | str | ISO8601 导入时间                     |
 
 > 检索时交给 LLM 的**上下文文本**与**来源元数据**分离存放：文本入 `documents`，元数据入 `metadatas`，便于引用展示。
@@ -611,7 +589,7 @@ COLLECTION_NAME=knowledge_base
 - `test_loader.py`：三种格式各一份样例，验证解析输出非空且含页码。
 - `test_splitter.py`：验证块大小在预期区间、overlap 生效、表格块不被切。
 - `test_retriever.py`：mock 嵌入接口，验证 Top-K 数量与排序。
-- `test_api.py`：用 `TestClient` 打通 `/api/health`、`/api/documents` 等接口。
+- `test_api.py`：用 `TestClient` 打通 `/api/v1/health`、`/api/v1/documents` 等接口。
 
 ---
 
@@ -626,7 +604,7 @@ COLLECTION_NAME=knowledge_base
 | **R5** | 云端 API 限流/超时     | 导入或问答中断  | 重试+退避+超时；批量导入分批限速               |
 | **R6** | 模型幻觉             | 回答不可信    | 提示词强约束 + temperature 0.2 + 强制溯源 |
 | **R7** | 中途改嵌入维度          | 全库向量失效   | V1 锁定 1024 维；改动前必须整库重建          |
-| **R8** | API Key 泄漏       | 费用损失     | Key 仅存 `.env`，`.gitignore` 排除   |
+| **R8** | API Key 泄漏       | 费用损失     | 操作系统环境变量 / DPAPI / 服务器密钥库；日志与仓库不出现完整 Key |
 | **R9** | 摘要式回答丢失细节        | 关键信息被略过  | 提示词要求"引用编号 + 忠实原文"              |
 
 ---

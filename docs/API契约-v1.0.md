@@ -1,17 +1,28 @@
 # API 契约 v1.0
 
-> 本文冻结 Web 化前必须稳定的接口语义：聊天 SSE、上传任务、文档软删除、Key 设置。
->
-> 它是前后端并行开发的依据；字段变更必须先改本文，再改实现与 UI。
+> 本文是**路由、字段、SSE、错误码、job 状态机的唯一来源**。字段变更必须先改本文，再改实现与 UI；需求/架构只链接本文，不再复制接口表。
 >
 > | 项 | 值 |
 > |---|---|
-> | 状态 | **Draft for implementation** |
+> | 状态 | **Partially implemented**（P0–P3 已实现；P4 Key 设置未实现） |
 > | 日期 | 2026-10-25 |
 > | 前缀 | `/api/v1` |
 > | 本地模式 | `127.0.0.1`，无登录，固定 `tenant_id="local"` |
 > | 服务器模式 | 登录后从 session 推导 tenant；未认证 401 |
-> | 关联 | [架构演进设计](架构演进设计.md) · [需求文档](RAG需求文档-v1.0.md) · [任务清单](RAG开发任务清单-v1.0.md) |
+> | 关联 | [文档地图](README.md) · [架构演进设计](架构演进设计.md) · [需求文档](RAG需求文档-v1.0.md) · [任务清单](RAG开发任务清单-v1.0.md) |
+
+### 实现状态（2026-10-25）
+
+| 模块 | 状态 | 当前实现说明 |
+|---|---|---|
+| `GET /health` | ✅ 已实现 | 只返回 `status/version/mode`；`index` 统计未实现 |
+| `POST /chat` SSE | ✅ 已实现 | 真实流式验收通过；无引用时 `done.answer` 回退固定话术 |
+| 文档上传 / job | ✅ 已实现 | 后台串行任务；状态枚举见 §四 |
+| 文档列表 / 软删除 / 恢复 / 彻底删除 | ✅ 已实现 | `document_id` 当前使用 `file_hash` |
+| 索引重建 / job | ✅ 已实现 | 保留已移出文档，不重新激活 |
+| Key 设置 | ⏳ 未实现 | 当前 Key 来自系统环境变量 |
+| 统一错误结构 / `X-Request-ID` | ⏳ 未实现 | 当前 FastAPI 默认错误体；接入前端前需补齐 |
+| `document_id` ULID | ⏳ 未切换 | 当前 `file_hash`；服务器 Beta 全量重建时切换 |
 
 ---
 
@@ -77,8 +88,8 @@
 ### 1.5 时间与 ID
 
 - 时间：ISO 8601 UTC，例如 `2026-10-25T01:20:00Z`；
-- 文档 ID：服务器生成的 ULID/UUID，不用文件名或 `file_hash` 充当身份；
-- `file_hash`：内容 SHA-256，只用于去重/版本，不用于跨租户身份。
+- 文档 ID：目标为服务器生成的 ULID；**当前本地实现暂用 `file_hash` 作为 `document_id`**，前端只把它当不透明字符串，不依赖其形态；
+- `file_hash`：内容 SHA-256，只用于去重/版本；服务器 Beta 全量重建时切换为 ULID 身份。
 
 ---
 
@@ -92,15 +103,11 @@
 {
   "status": "ok",
   "version": "0.1.0",
-  "mode": "local",
-  "index": {
-    "documents": 10,
-    "chunks": 4021
-  }
+  "mode": "local"
 }
 ```
 
-服务器模式可增加 `db` / `vector` / `worker` 状态；本地模式不暴露敏感路径。
+`index` 统计（文档数/chunk 数）为后续字段，当前实现不返回；本地模式不暴露敏感路径。
 
 ---
 
@@ -283,10 +290,10 @@ files: <file2>
 | state | 含义 |
 |---|---|
 | `queued` | 排队中 |
+| `running` | 任务已开始，准备解析 |
 | `parsing` | 解析中（PDF 可按页） |
 | `splitting` | 分块中 |
-| `embedding` | 嵌入中（按 batch） |
-| `writing` | 写入向量库 |
+| `embedding` | 嵌入并写入向量库 |
 | `ready` | 已入库，可检索 |
 | `skipped` | 相同 hash 已存在，跳过 |
 | `failed` | 失败，`error` 给出原因 |
@@ -297,10 +304,11 @@ files: <file2>
 
 ```text
 queued     0–5%
+running    1–5%
 parsing    5–35%
 splitting 35–50%
-embedding 50–95%
-writing   95–100%
+embedding 50–99%
+ready     100%
 ```
 
 前端轮询间隔 500–800ms；完成后停止轮询并刷新文档列表。
@@ -411,7 +419,7 @@ writing   95–100%
 {"job_id":"job_01J...","state":"queued","scope":"active"}
 ```
 
-`GET /api/v1/index/jobs/{job_id}` 返回与上传 job 相同的进度结构，`unit="file"`，`state` 使用 `queued/parsing/splitting/embedding/writing/ready/failed`。
+`GET /api/v1/index/jobs/{job_id}` 返回与上传 job 相同的进度结构，`unit="file"`，`state` 使用 `queued/running/parsing/splitting/embedding/ready/failed`。
 
 - 只重建 `active` 文档；
 - `removed` 文档保持 removed；
@@ -557,28 +565,7 @@ writing   95–100%
 
 ## 八、实现顺序
 
-1. **P0：契约冻结（本文）**
-2. **P1：本地 FastAPI 骨架**
-   - `/health`
-   - `/settings/secrets`（env adapter）
-   - 错误结构 / request_id
-3. **P2：聊天**
-   - T-4.1 检索器
-   - T-4.2 提示词
-   - T-4.4 流式生成
-   - `/chat` SSE
-4. **P3：文档**
-   - 上传 job + 轮询
-   - 列表 / 软删除 / 恢复 / 彻底删除
-   - 重建 job
-5. **P4：Key 设置**
-   - 本地 DPAPI/keyring
-   - 首次引导
-   - 测试连接
-6. **P5：服务器适配**
-   - auth/tenant
-   - Postgres / 对象存储 / Redis
-   - 每租户向量隔离
+具体任务编号、依赖与完成状态由 [开发任务清单](RAG开发任务清单-v1.0.md) 管理，本文不重复维护。接口层面的实现状态见开头的“实现状态”表。
 
 ---
 
@@ -587,7 +574,7 @@ writing   95–100%
 - [ ] 所有响应符合错误结构，且带 `request_id`
 - [ ] 聊天 SSE 事件顺序稳定，`sources` 中的 `n` 与回答引用一致
 - [ ] 停止生成后不残留上游请求
-- [ ] 上传 job 状态机覆盖 queued/parsing/splitting/embedding/writing/ready/skipped/failed
+- [ ] 上传 job 状态机覆盖 queued/running/parsing/splitting/embedding/ready/skipped/failed
 - [ ] 上传进度来自真实阶段，不是前端伪造
 - [ ] 软删除后检索不到，恢复后立即可检索
 - [ ] 彻底删除同时移除 chunk/向量/原文件
@@ -597,15 +584,15 @@ writing   95–100%
 
 ---
 
-## 十、待确认
+## 十、接口决策记录
 
-| # | 问题 | 当前建议 |
-|---|---|---|
-| Q1 | `score` 用相似度还是距离 | 用相似度（越大越好），检索器内部转换 |
-| Q2 | 文档 ID 用 ULID 还是 UUID | ULID，按时间可排序 |
-| Q3 | 上传是否支持取消 | V1 不做；先做失败重试 |
-| Q4 | 彻底删除同步还是异步 | 小文件同步 200；大库可转 202 job |
-| Q5 | 会话历史存哪里 | V1 内存，T-6 再上 SQLite |
-| Q6 | 服务器模式认证方式 | OIDC/Passkey，后续定 |
+| # | 问题 | 状态 | 结论 |
+|---|---|---|---|
+| Q1 | `score` 用相似度还是距离 | 已定 | 用 0~1 相似度（越大越好），检索器内部从 cosine 距离转换 |
+| Q2 | 文档 ID 用 ULID 还是 UUID | 目标已定 | 目标 ULID；当前本地实现过渡为 `file_hash` |
+| Q3 | 上传是否支持取消 | 待定 | V1 不做；先做失败重试 |
+| Q4 | 彻底删除同步还是异步 | 已定 | 小文件同步 200；大库后续可转 202 job |
+| Q5 | 会话历史存哪里 | 待定 | V1 内存，T-6 再上 SQLite |
+| Q6 | 服务器模式认证方式 | 待定 | OIDC / Passkey，后续定 |
 
 > 契约变更流程：先改本文 → 更新测试 → 更新前端 mock → 再改实现。禁止只改一端。
