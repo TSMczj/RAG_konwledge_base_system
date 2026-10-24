@@ -85,6 +85,12 @@ class Retriever:
         self._context = context or local_context()
         self._store = store or VectorStore(settings=self._settings)
 
+    def close(self) -> None:
+        """关闭底层向量库（API 请求结束时调用）。"""
+        close = getattr(self._store, "close", None)
+        if close is not None:
+            close()
+
     def retrieve(
         self,
         question: str,

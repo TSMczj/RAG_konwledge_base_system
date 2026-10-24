@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app import __version__
+from app.api.chat import router as chat_router
 from app.api.documents import router as documents_router
 from app.api.health import router as health_router
 from app.api.index import router as index_router
@@ -41,6 +42,7 @@ def create_app() -> FastAPI:
         description="本地文档问答 API；仅监听 127.0.0.1。",
     )
     app.include_router(health_router, prefix="/api/v1")
+    app.include_router(chat_router, prefix="/api/v1")
     app.include_router(documents_router, prefix="/api/v1")
     app.include_router(index_router, prefix="/api/v1")
 

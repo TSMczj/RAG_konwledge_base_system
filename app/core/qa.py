@@ -119,6 +119,16 @@ class QAService:
     def llm(self) -> DeepSeekLLM:
         return self._llm
 
+    @property
+    def settings(self) -> Settings:
+        return self._settings
+
+    def close(self) -> None:
+        """释放检索器持有的向量库连接。"""
+        close = getattr(self._retriever, "close", None)
+        if close is not None:
+            close()
+
     def answer(self, question: str, *, k: int | None = None) -> QAResult:
         """完成一次问答。
 
