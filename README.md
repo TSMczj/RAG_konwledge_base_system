@@ -2,9 +2,11 @@
 
 > A personal knowledge base system constructed based on the Naive Retrieval-Augmented Generation technology. It is currently in the development and iteration process.
 
-基于 LangChain + FastAPI 的**本地私有知识库问答系统**。把 PDF / Word / TXT 导入知识库，提问时用向量检索召回原文片段，交给大模型生成**带出处**的回答，通过浏览器页面使用。
+基于 LangChain + FastAPI 的**本地私有知识库问答系统**。把 PDF / Word / TXT 导入知识库，提问时用向量检索召回原文片段，交给大模型生成**带出处**的回答。
 
 **定位**：单用户、本地运行、不对外发布。
+
+**当前状态**：M1（文档索引）和 M2（检索生成）已完成，M3 Web API 已完成到聊天 SSE；浏览器页面仍在 `prototype/ui` 评审，尚未接入 `templates`。因此现在可以通过 CLI 和 `/docs` 使用完整问答链路，首页还不是最终产品页面。
 
 ---
 
@@ -23,14 +25,17 @@
 
 ## 核心能力
 
-| 能力 | 说明 |
-|---|---|
-| 多格式摄入 | PDF / Word / TXT，保留页码与表格结构 |
-| 语义检索 | 向量相似度 Top-K 召回 |
-| 带出处回答 | 每条结论标注 `[n] 文件名 · 第 x 页`，可展开原文核对 |
-| 多轮对话 | 支持追问，自动改写指代性问题 |
-| 兜底防幻觉 | 知识库无相关内容时明确说明，不编造 |
-| 文档管理 | 网页上传 / 列表 / 删除 / 重建索引 |
+| 能力 | 状态 | 说明 |
+|---|---|---|
+| 多格式摄入 | ✅ 已实现 | PDF / Word / TXT，保留页码与表格结构 |
+| 语义检索 | ✅ 已实现 | 向量相似度 Top-K 召回，默认 K=5 |
+| 带出处回答 | ✅ 已实现 | CLI/API 回答标注 `[n] 文件名 · 页码`，可展开原文核对 |
+| 兜底防幻觉 | ✅ 已实现 | 无有效引用时返回“知识库中没有相关信息。” |
+| 文档管理 API | ✅ 已实现 | 列表 / 上传 job / 软删除 / 恢复 / 彻底删除 / 重建 |
+| Web API | ✅ 已实现 | FastAPI + SSE；`/docs` 可调通已实现接口 |
+| Web 页面 | ⏳ 待接入 | `prototype/ui` 已评审，T-5.5/5.6 接入 `templates` |
+| 多轮对话 | ⏳ 未开始 | Sprint 4（T-6） |
+| 一键启动脚本 | ⏳ 未实现 | Sprint 4（T-7.2） |
 
 ## 技术栈
 
@@ -50,17 +55,21 @@
 ```
 RAG_konwledge_base_system/
 ├── app/                     # 应用主体
-│   ├── api/                 #   REST 路由层
-│   ├── core/                #   业务核心（解析 / 分块 / 嵌入 / 检索 / 生成）
-│   ├── models/              #   Pydantic 数据结构
-│   ├── templates/           #   Jinja2 页面
-│   └── static/              #   css / js
+│   ├── api/                 #   chat / documents / health / index 路由
+│   ├── core/                #   loader / splitter / embedder / vectorstore / retriever / prompt / llm / qa
+│   ├── services/            #   文档管理与后台上传/重建任务
+│   ├── static/              #   css / js
+│   ├── context.py           #   RequestContext / SecretProvider 边界
+│   ├── config.py            #   pydantic-settings
+│   └── main.py              #   FastAPI 入口（127.0.0.1:8000）
+├── templates/               # Jinja2 页面（当前为 API 占位页）
 ├── data/                    # 运行期数据（内容不进版本库）
 │   ├── uploads/             #   原始文档
 │   └── chroma/              #   向量库持久化
 ├── docs/                    # 项目文档
 ├── logs/                    # 日志输出
-├── scripts/                 # 运维 / 自检脚本
+├── prototype/ui/            # UI 评审原型（尚未接入 templates）
+├── scripts/                 # 建库 / 管理 / 问答 / 评估 / 自检脚本
 ├── tests/                   # 测试
 ├── .env.example             # 非敏感配置模板
 └── .gitignore
@@ -82,27 +91,84 @@ RAG_konwledge_base_system/
 
 ### 2. 安装依赖
 
-```bash
+```powershell
 python -m venv .venv
-.venv\Scripts\activate        # Windows
-# source .venv/bin/activate   # macOS / Linux
+.venv\Scripts\Activate.ps1      # PowerShell
+# .venv\Scripts\activate.bat    # cmd
+# source .venv/bin/activate     # macOS / Linux
 
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 ### 3. 配置
 
-```bash
-cp .env.example .env
+```powershell
+Copy-Item .env.example .env
 # 按需修改 .env 中的模型名、检索参数、路径
 ```
 
-### 4. 启动
+`.env` 只放非敏感参数；两个 API Key 继续走系统环境变量。
 
-```bash
-# 启动服务后访问 http://127.0.0.1:8000
-uvicorn app.main:app --reload
+### 4. 启动 API
+
+```powershell
+# 只监听 127.0.0.1:8000
+python -m app.main
+
+# 或显式用 uvicorn（开发时可加 --reload）
+uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
+
+启动后：
+
+- 首页：<http://127.0.0.1:8000/>（当前为 API 占位页）
+- Swagger：<http://127.0.0.1:8000/docs>
+- 健康检查：<http://127.0.0.1:8000/api/v1/health>
+
+### 5. 使用方式
+
+**CLI 建库 / 管理：**
+
+```powershell
+# 建库：默认扫描 data/uploads
+.venv\Scripts\python.exe scripts\build_index.py
+
+# 递归扫描、强制重嵌
+.venv\Scripts\python.exe scripts\build_index.py --recursive --force
+
+# 列出 / 删除 / 重建（重建会重新消耗嵌入额度）
+.venv\Scripts\python.exe scripts\manage_index.py --list
+.venv\Scripts\python.exe scripts\manage_index.py --delete <file_hash或文件名>
+.venv\Scripts\python.exe scripts\manage_index.py --rebuild
+```
+
+**CLI 问答：**
+
+```powershell
+.venv\Scripts\python.exe scripts\ask.py "LM358 的电源电压范围是多少？"
+.venv\Scripts\python.exe scripts\ask.py --k 3 "Transformer 的核心结构是什么？"
+```
+
+**检索命中率评估：**
+
+```powershell
+.venv\Scripts\python.exe scripts\eval_retrieval.py
+```
+
+**模型连通性自检：**
+
+```powershell
+.venv\Scripts\python.exe scripts\check_models.py
+```
+
+**UI 原型：**
+
+```powershell
+python -m http.server 8765 --bind 127.0.0.1 --directory prototype/ui
+# http://127.0.0.1:8765/
+```
+
+原型是评审版，不连接真实 API；页面接入见任务清单 T-5.5/5.6。
 
 ---
 
