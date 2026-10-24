@@ -201,14 +201,18 @@ def main(argv: list[str] | None = None) -> int:
         print(f"向量库初始化失败: {type(exc).__name__}: {exc}")
         return 1
 
-    stats = build_index(
-        upload_dir,
-        recursive=args.recursive,
-        force=args.force,
-        store=store,
-        settings=settings,
-    )
-    print_summary(stats, store)
+    try:
+        stats = build_index(
+            upload_dir,
+            recursive=args.recursive,
+            force=args.force,
+            store=store,
+            settings=settings,
+        )
+        print_summary(stats, store)
+    finally:
+        # HNSW 索引必须在退出前显式关闭客户端才会完整落盘
+        store.close()
 
     return 0 if not stats.failures and stats.index_failed == 0 else 1
 

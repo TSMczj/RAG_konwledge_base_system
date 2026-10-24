@@ -41,11 +41,11 @@ def _print_files(files: list[IndexedFile]) -> None:
         print("知识库为空。")
         return
 
-    print(f"{'FILE_HASH':<66}{'CHUNKS':>7}{'PAGES':>7}{'TYPE':<7}{'CREATED_AT':<22}SOURCE")
-    print("-" * 132)
+    print(f"{'FILE_HASH':<66}{'CHUNKS':>7}{'PAGES':>7}  {'TYPE':<7}{'CREATED_AT':<22}SOURCE")
+    print("-" * 134)
     for item in files:
         print(
-            f"{item.file_hash:<66}{item.chunks:>7}{item.pages:>7}"
+            f"{item.file_hash:<66}{item.chunks:>7}{item.pages:>7}  "
             f"{item.doc_type:<7}{item.created_at[:19]:<22}{item.source_file}"
         )
     print()
@@ -111,33 +111,37 @@ def main(argv: list[str] | None = None) -> int:
         print(f"向量库初始化失败: {type(exc).__name__}: {exc}")
         return 1
 
-    if args.delete:
-        if not _confirm(f"确认删除 {args.delete}？[y/N] ", args.yes):
-            print("已取消。")
-            return 1
-        deleted = _delete(store, args.delete)
-        print(f"库内总量: {store.count()}")
-        return 0 if deleted else 1
+    try:
+        if args.delete:
+            if not _confirm(f"确认删除 {args.delete}？[y/N] ", args.yes):
+                print("已取消。")
+                return 1
+            deleted = _delete(store, args.delete)
+            print(f"库内总量: {store.count()}")
+            return 0 if deleted else 1
 
-    if args.rebuild:
-        current = store.count()
-        if not _confirm(f"重建会清空当前 {current} 个 chunk，确认？[y/N] ", args.yes):
-            print("已取消。")
-            return 1
+        if args.rebuild:
+            current = store.count()
+            if not _confirm(f"重建会清空当前 {current} 个 chunk，确认？[y/N] ", args.yes):
+                print("已取消。")
+                return 1
 
-        deleted = store.delete_all()
-        print(f"已清空 {deleted} 个 chunk，开始重建…")
-        stats = build_index(
-            args.dir or settings.upload_dir,
-            recursive=args.recursive,
-            store=store,
-            settings=settings,
-        )
-        print_summary(stats, store)
-        return 0 if not stats.failures and stats.index_failed == 0 else 1
+            deleted = store.delete_all()
+            print(f"已清空 {deleted} 个 chunk，开始重建…")
+            stats = build_index(
+                args.dir or settings.upload_dir,
+                recursive=args.recursive,
+                store=store,
+                settings=settings,
+            )
+            print_summary(stats, store)
+            return 0 if not stats.failures and stats.index_failed == 0 else 1
 
-    _print_files(store.list_files())
-    return 0
+        _print_files(store.list_files())
+        return 0
+    finally:
+        # 保证 HNSW 索引落盘，避免出现只有 metadata 的坏库
+        store.close()
 
 
 if __name__ == "__main__":

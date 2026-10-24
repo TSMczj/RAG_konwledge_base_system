@@ -266,6 +266,45 @@ def normalize_text(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n").strip()
 
 
+def _is_cjk_char(ch: str) -> bool:
+    """判断字符是否属于中文/全角标点范围。"""
+    return "\u4e00" <= ch <= "\u9fff" or "\u3000" <= ch <= "\u303f" or "\uff00" <= ch <= "\uffef"
+
+
+def _join_wrapped_lines(text: str) -> str:
+    """把 PDF 文本层的软换行拼回段落（对应 T-1.3 / T-2.1 的句子完整性）。
+
+    PDF 的 ``get_text`` 往往每行输出一个 ``\\n``；如果直接交给分块器，
+    ``\\n`` 会被当成分隔符，导致 chunk 在行尾、甚至单词中间截断。
+    这里按空行分段落，再把段内行拼起来：
+
+    - 行尾是 ``-``：直接接上（``pre-`` + ``trained`` → ``pre-trained``）；
+    - 中文字符 / 中文标点相邻：不加空格；
+    - 其余情况加一个空格。
+
+    表格段不走这里（由 _page_text_excluding_tables 先排除）。
+    """
+    paragraphs = re.split(r"\n\s*\n", text)
+    merged_paragraphs: list[str] = []
+
+    for paragraph in paragraphs:
+        lines = [line.strip() for line in paragraph.splitlines() if line.strip()]
+        if not lines:
+            continue
+
+        merged = lines[0]
+        for line in lines[1:]:
+            if merged.endswith("-"):
+                merged += line
+            elif _is_cjk_char(merged[-1]) and _is_cjk_char(line[0]):
+                merged += line
+            else:
+                merged += " " + line
+        merged_paragraphs.append(merged)
+
+    return "\n\n".join(merged_paragraphs)
+
+
 def compute_file_hash(path: str | Path) -> str:
     """计算文件内容的 SHA-256（用于幂等判重与 ``chunk_id``）。
 
@@ -642,6 +681,9 @@ def _load_txt(path: Path) -> list[Segment]:
 _TABLE_MIN_ROWS = 2             # 少于 2 行多半是版式框，不是表格
 _TABLE_MIN_COLS = 2             # 单列布局对问答没有价值，且容易误判
 _TABLE_MIN_CELLS = 4            # 至少要有 4 个非空单元格
+_TABLE_MAX_COLS = 32            # 超过 32 列基本是注意力可视化图/多栏排版，不是表格
+_TABLE_WIDE_COLS = 20           # 超过 20 列的宽表再用「数字占比」二次判断
+_TABLE_WIDE_MIN_NUMERIC = 0.15  # 宽表里数字占比低于 15% → 判为假表
 _TABLE_OVERLAP_THRESHOLD = 0.5  # 文本块与表格重叠超过一半才剔除，避免误删相邻段落
 
 #: pdfplumber 的表格 bbox：(x0, top, x1, bottom)，单位是 PDF 点
@@ -701,14 +743,35 @@ def _table_to_markdown(rows: list[list[str | None]]) -> str:
 
 
 def _is_useful_table(rows: list[list[str | None]]) -> bool:
-    """过滤版式框、单列布局等假表格，避免把页面装饰当表格入库。"""
+    """过滤版式框、注意力可视化图等假表格，避免污染检索。
+
+    pdfplumber 只按线条找表格；论文里的注意力可视化图、多栏排版也可能
+    被切成 40+ 列的“表格”。这里用列数与宽表数字占比兜底。
+    """
     if len(rows) < _TABLE_MIN_ROWS:
         return False
+
     width = max((len(row) for row in rows), default=0)
-    if width < _TABLE_MIN_COLS:
+    if width < _TABLE_MIN_COLS or width > _TABLE_MAX_COLS:
         return False
-    non_empty = sum(1 for row in rows for cell in row if cell and str(cell).strip())
-    return non_empty >= _TABLE_MIN_CELLS
+
+    cells = [
+        str(cell).strip()
+        for row in rows
+        for cell in row
+        if cell and str(cell).strip()
+    ]
+    if len(cells) < _TABLE_MIN_CELLS:
+        return False
+
+    # 宽表（财报常见 20+ 列）用数字占比二次判断：
+    # 真实财报含大量金额/百分比；注意力可视化图几乎全是单词，数字占比接近 0。
+    if width > _TABLE_WIDE_COLS:
+        numeric = sum(1 for cell in cells if any(ch.isdigit() for ch in cell))
+        if numeric / len(cells) < _TABLE_WIDE_MIN_NUMERIC:
+            return False
+
+    return True
 
 
 def _rect_overlap_ratio(block: tuple[float, float, float, float], box: TableBox) -> float:
@@ -768,7 +831,7 @@ def _page_text_excluding_tables(pdf_page, boxes: list[TableBox]) -> str:
         不含表格文字的正文。
     """
     if not boxes:
-        return pdf_page.get_text("text")
+        return _join_wrapped_lines(pdf_page.get_text("text"))
 
     kept: list[str] = []
     for block in pdf_page.get_text("blocks"):
@@ -778,7 +841,7 @@ def _page_text_excluding_tables(pdf_page, boxes: list[TableBox]) -> str:
         rect = (block[0], block[1], block[2], block[3])
         if any(_is_block_in_table(rect, box) for box in boxes):
             continue
-        text = block[4].strip()
+        text = _join_wrapped_lines(block[4]).strip()
         if text:
             kept.append(text)
     return "\n\n".join(kept)
@@ -892,6 +955,8 @@ def _load_pdf(path: Path) -> list[Segment]:
       记录 warning（T-1.7），但**不判失败**——是否跳过由调用方决定；
     - **可能漏报**：带少量文字水印的扫描页仍会被算作「有文本层」，阈值只做整篇粗判；
     - **只识别有框线的表格**：pdfplumber 默认按线条判断；无框线表格会留在正文里；
+    - **结构图可能误判**：注意力可视化 / 模型结构图的线条可能被当成表格，
+      V1 只做列数与宽表数字占比的粗过滤，少量图注碎片仍可能入库；
     - **同页顺序不还原**：正文 Segment 在前，表格 Segment 在后，不按实际版式位置交错；
     - **不识别分栏**：双栏论文可能按页面几何顺序而非人类阅读顺序输出；
     - **图片公式会丢失**：PDF 中公式若为图片形式，V1 不做公式识别（FR-02 已注明）；

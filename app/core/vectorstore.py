@@ -136,6 +136,9 @@ class VectorStore:
         # LangChain 没公开 upsert/count，这里拿到底层 collection；
         # add_texts 只做 add，重复 chunk_id 会报错，所以入库统一用 upsert。
         self._collection = self._store._collection
+        # 退出前必须显式 close：Chroma 的 HNSW 索引在关闭时才会完整落盘，
+        # 只依赖进程退出会出现「只有 index_metadata.pickle、没有 *.bin」的坏库。
+        self._client = self._store._client
 
         metric = (self._collection.metadata or {}).get("hnsw:space")
         if metric and metric != "cosine":
@@ -163,6 +166,20 @@ class VectorStore:
     def store(self) -> Chroma:
         """底层 LangChain Chroma 实例（只读用途，如 T-4.1 检索）。"""
         return self._store
+
+    def close(self) -> None:
+        """关闭底层 Chroma 客户端，确保 HNSW 索引完整落盘。
+
+        长时间建库后如果直接退出进程，可能只留下 ``index_metadata.pickle``，
+        下次打开会报 ``Error loading hnsw index``；CLI 必须在结束前调用本方法。
+        """
+        close = getattr(self._client, "close", None)
+        if close is None:
+            return
+        try:
+            close()
+        except Exception as exc:  # noqa: BLE001 —— 关闭失败不应覆盖主流程结果
+            logger.warning("关闭 Chroma 客户端失败: {}", exc)
 
     def count(self) -> int:
         """当前 collection 的向量条数。"""

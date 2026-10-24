@@ -90,6 +90,8 @@ def _patch_cli(
 ) -> None:
     monkeypatch.setattr(manage_module, "get_settings", lambda: settings)
     monkeypatch.setattr(manage_module, "VectorStore", lambda settings=None: store)
+    # CLI 结束会 close；测试要继续用同一个 store 做断言
+    monkeypatch.setattr(store, "close", lambda: None)
     # 避免把 loguru sink 绑到 pytest 的临时捕获流上
     monkeypatch.setattr(manage_module, "setup_logging", lambda: None)
 

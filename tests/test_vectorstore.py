@@ -383,3 +383,14 @@ def test_delete_all_clears_collection_but_keeps_it_usable(tmp_path: Path) -> Non
     store.index_chunks([_chunk(0, "c", file_hash="hash-c")])
     assert store.count() == 1
     assert store.has_file("hash-c")
+
+
+def test_close_flushes_and_can_reopen(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    store = VectorStore(settings=settings, embedding_function=FakeEmbeddings())
+    store.index_chunks([_chunk(0, "a"), _chunk(1, "b")])
+    store.close()
+
+    reopened = VectorStore(settings=settings, embedding_function=FakeEmbeddings())
+    assert reopened.count() == 2
+    reopened.close()

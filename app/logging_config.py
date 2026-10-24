@@ -120,6 +120,8 @@ def setup_logging(level: str | None = None) -> None:
 
     # 压制噪音：这些库的 INFO 日志（如每次 HTTP 请求）对本地开发没用
     # 注意：openai 3.x 依赖的是新版 httpx2 / httpcore2，日志名与旧版不同，两个都要压
+    # pdfminer 尤其重要：DEBUG 级别会把 PDF 每个 token 都写进文件，解析 100 页 PDF
+    # 会慢到不可用（实测 10 分钟仍卡在解析，日志涨到 8 MB+）。
     for noisy, noisy_level in (
         ("uvicorn.access", logging.WARNING),
         ("chromadb", logging.WARNING),
@@ -132,6 +134,8 @@ def setup_logging(level: str | None = None) -> None:
         ("asyncio", logging.WARNING),
         ("huggingface_hub", logging.WARNING),
         ("langchain", logging.WARNING),
+        ("pdfminer", logging.WARNING),
+        ("pdfplumber", logging.WARNING),
     ):
         logging.getLogger(noisy).setLevel(noisy_level)
 
