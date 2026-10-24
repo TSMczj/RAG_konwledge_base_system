@@ -142,6 +142,7 @@ def test_chunk_metadata_matches_schema() -> None:
         "chunk_id",
         "created_at",
         "kind",
+        "tenant_id",
     }
     assert meta["source_file"] == "table.pdf"
     assert meta["file_path"] == "C:/tmp/table.pdf"
@@ -151,6 +152,7 @@ def test_chunk_metadata_matches_schema() -> None:
     assert meta["chunk_index"] == 0
     assert meta["chunk_id"] == "testhash-0"
     assert meta["kind"] == "text"
+    assert meta["tenant_id"] == "local"
 
     assert len({c.created_at for c in chunks}) == 1
     datetime.fromisoformat(chunks[0].created_at)

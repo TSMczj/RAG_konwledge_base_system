@@ -63,6 +63,7 @@ class Chunk:
         chunk_id: ``{file_hash}-{chunk_index}``，全局唯一。
         created_at: 分块时间，ISO8601（UTC）。
         kind: ``text`` / ``table``；表格块整表保留。
+        tenant_id: 租户标识；本地单用户固定 ``"local"``（ADR-001）。
     """
 
     text: str
@@ -75,6 +76,7 @@ class Chunk:
     chunk_id: str
     created_at: str
     kind: str = KIND_TEXT
+    tenant_id: str = "local"
 
     @property
     def char_count(self) -> int:
@@ -96,6 +98,7 @@ class Chunk:
             "chunk_id": self.chunk_id,
             "created_at": self.created_at,
             "kind": self.kind,
+            "tenant_id": self.tenant_id,
         }
 
 
