@@ -1,0 +1,122 @@
+[
+  {
+    "id": "Q01",
+    "question": "Transformer 使用了几种多头注意力？",
+    "expected_sources": ["attention is all you need.pdf"],
+    "note": "第 5 页，encoder-decoder / self / masked 三种"
+  },
+  {
+    "id": "Q02",
+    "question": "Transformer 的编码器和解码器分别由哪些层组成？",
+    "expected_sources": ["attention is all you need.pdf"],
+    "note": "第 2 页，self-attention + FFN 堆叠"
+  },
+  {
+    "id": "Q03",
+    "question": "BERT 的两个预训练任务是什么？",
+    "expected_sources": ["bert.pdf"],
+    "note": "Masked LM + NSP"
+  },
+  {
+    "id": "Q04",
+    "question": "BERT 如何生成双向表示？",
+    "expected_sources": ["bert.pdf"],
+    "note": "第 2 页，联合左右上下文"
+  },
+  {
+    "id": "Q05",
+    "question": "LM358 的电源电压范围是多少？",
+    "expected_sources": ["lm358.pdf"],
+    "note": "规格表"
+  },
+  {
+    "id": "Q06",
+    "question": "LM358 有哪些封装形式？",
+    "expected_sources": ["lm358.pdf"],
+    "note": "SOIC / TSSOP / VSSOP / SOT-23 等"
+  },
+  {
+    "id": "Q07",
+    "question": "LM358 的输入偏置电流是多少？",
+    "expected_sources": ["lm358.pdf"],
+    "note": "电气特性表"
+  },
+  {
+    "id": "Q08",
+    "question": "人形机器人的总自由度要求是多少？",
+    "expected_sources": ["2.技术参数.docx"],
+    "note": "技术参数表，≥40，单腿≥6 等"
+  },
+  {
+    "id": "Q09",
+    "question": "人形机器人的电池和续航有什么要求？",
+    "expected_sources": ["2.技术参数.docx"],
+    "note": "电池快拆、续航等"
+  },
+  {
+    "id": "Q10",
+    "question": "特斯拉 2024 年汽车销售收入是多少？",
+    "expected_sources": ["nasdaq-tsla-2025-10K-25570807.pdf"],
+    "note": "10-K 营收表"
+  },
+  {
+    "id": "Q11",
+    "question": "特斯拉有哪些主要工厂？",
+    "expected_sources": ["nasdaq-tsla-2025-10K-25570807.pdf"],
+    "note": "Gigafactory 列表"
+  },
+  {
+    "id": "Q12",
+    "question": "特斯拉面临哪些风险因素？",
+    "expected_sources": ["nasdaq-tsla-2025-10K-25570807.pdf"],
+    "note": "Risk Factors"
+  },
+  {
+    "id": "Q13",
+    "question": "个人信息保护法要求处理个人信息遵循哪些原则？",
+    "expected_sources": ["中华人民共和国个人信息保护法.pdf"],
+    "note": "合法、正当、必要、诚信等"
+  },
+  {
+    "id": "Q14",
+    "question": "处理个人信息取得同意的要求是什么？",
+    "expected_sources": ["中华人民共和国个人信息保护法.pdf"],
+    "note": "同意规则"
+  },
+  {
+    "id": "Q15",
+    "question": "个人信息跨境提供需要满足什么条件？",
+    "expected_sources": ["中华人民共和国个人信息保护法.pdf"],
+    "note": "跨境提供规则"
+  },
+  {
+    "id": "Q16",
+    "question": "破产受托人的主要职责是什么？",
+    "expected_sources": ["handbook-872p.docx"],
+    "note": "trustee duties"
+  },
+  {
+    "id": "Q17",
+    "question": "债权人会议的作用是什么？",
+    "expected_sources": ["handbook-872p.docx"],
+    "note": "meeting of creditors"
+  },
+  {
+    "id": "Q18",
+    "question": "债务人如何获得破产免责？",
+    "expected_sources": ["handbook-872p.docx"],
+    "note": "discharge"
+  },
+  {
+    "id": "Q19",
+    "question": "这个 RAG 系统使用了哪些技术栈？",
+    "expected_sources": ["10_项目说明.txt"],
+    "note": "README 技术栈"
+  },
+  {
+    "id": "Q20",
+    "question": "这个项目 M1 阶段完成了什么？",
+    "expected_sources": ["10_项目说明.txt"],
+    "note": "README 开发进度"
+  }
+]
