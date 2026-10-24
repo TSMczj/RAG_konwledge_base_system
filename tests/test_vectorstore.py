@@ -367,6 +367,31 @@ def test_list_files_groups_by_hash(tmp_path: Path) -> None:
     assert by_hash["hash-b"].chunks == 1
     assert by_hash["hash-b"].pages == 0
     assert by_hash["hash-a"].created_at.startswith("2026-10-23")
+    assert by_hash["hash-a"].active is True
+
+
+def test_soft_delete_and_restore_updates_active(tmp_path: Path) -> None:
+    store = VectorStore(
+        settings=_settings(tmp_path),
+        embedding_function=FakeEmbeddings(),
+    )
+    store.index_chunks([_chunk(0, "soft delete me", file_hash="hash-a")])
+
+    assert store.set_file_active("hash-a", False) == 1
+    assert store.list_files()[0].active is False
+    assert store.query("anything", k=5) == []
+
+    assert store.set_file_active("hash-a", True) == 1
+    assert store.list_files()[0].active is True
+    assert len(store.query("anything", k=5)) == 1
+
+
+def test_set_active_missing_file_returns_zero(tmp_path: Path) -> None:
+    store = VectorStore(
+        settings=_settings(tmp_path),
+        embedding_function=FakeEmbeddings(),
+    )
+    assert store.set_file_active("missing", False) == 0
 
 
 def test_delete_all_clears_collection_but_keeps_it_usable(tmp_path: Path) -> None:

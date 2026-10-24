@@ -28,7 +28,7 @@ from typing import Iterable
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from app.config import get_settings
+from app.config import Settings, get_settings
 from app.core.loader import (
     KIND_TABLE,
     KIND_TEXT,
@@ -64,6 +64,7 @@ class Chunk:
         created_at: 分块时间，ISO8601（UTC）。
         kind: ``text`` / ``table``；表格块整表保留。
         tenant_id: 租户标识；本地单用户固定 ``"local"``（ADR-001）。
+        active: 是否参与检索；软删除时置 False，向量仍保留（T-5.3）。
     """
 
     text: str
@@ -77,6 +78,7 @@ class Chunk:
     created_at: str
     kind: str = KIND_TEXT
     tenant_id: str = "local"
+    active: bool = True
 
     @property
     def char_count(self) -> int:
@@ -99,15 +101,17 @@ class Chunk:
             "created_at": self.created_at,
             "kind": self.kind,
             "tenant_id": self.tenant_id,
+            "active": self.active,
         }
 
 
-def _build_splitter() -> RecursiveCharacterTextSplitter:
+def _build_splitter(settings: Settings | None = None) -> RecursiveCharacterTextSplitter:
     """按配置构造分块器。
 
-    每次调用都重新读配置（``get_settings`` 内部有缓存），便于测试里重置环境变量。
+    Args:
+        settings: 可选配置；不传时读全局配置（CLI 默认行为）。
     """
-    settings = get_settings()
+    settings = settings or get_settings()
     return RecursiveCharacterTextSplitter(
         chunk_size=settings.chunk_size,
         chunk_overlap=settings.chunk_overlap,
@@ -225,11 +229,12 @@ def _split_document(
     return chunks
 
 
-def split_document(doc: LoadedDocument) -> list[Chunk]:
+def split_document(doc: LoadedDocument, settings: Settings | None = None) -> list[Chunk]:
     """切分单个文档（对应 FR-03 / T-2.1）。
 
     Args:
         doc: :func:`app.core.loader.load_document` 的返回值。
+        settings: 可选配置；不传时读全局配置。
 
     Returns:
         chunk 列表；解析失败的文档返回空列表。
@@ -237,10 +242,13 @@ def split_document(doc: LoadedDocument) -> list[Chunk]:
     if not doc.ok:
         logger.debug("跳过解析失败的文档: {} -> {}", doc.source_file, doc.error)
         return []
-    return _split_document(doc, _build_splitter())
+    return _split_document(doc, _build_splitter(settings))
 
 
-def split_documents(docs: Iterable[LoadedDocument]) -> list[Chunk]:
+def split_documents(
+    docs: Iterable[LoadedDocument],
+    settings: Settings | None = None,
+) -> list[Chunk]:
     """批量切分多个文档，跳过解析失败项（对应 T-2.1）。
 
     Args:
@@ -253,7 +261,7 @@ def split_documents(docs: Iterable[LoadedDocument]) -> list[Chunk]:
         只对 ``doc.ok`` 为真的文档切分；失败文档由批量解析层（T-1.6）记录，
         这里不重复报错，只在 debug 日志里说明跳过。
     """
-    splitter = _build_splitter()
+    splitter = _build_splitter(settings)
     chunks: list[Chunk] = []
     doc_count = 0
 

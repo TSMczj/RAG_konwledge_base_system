@@ -68,6 +68,7 @@ class IndexedFile:
         chunks: 该文件在库内的 chunk 数。
         pages: 有文本的页码最大值；TXT / Word 为 0。
         created_at: 首次入库时间（ISO8601）。
+        active: 是否参与检索；软删除后为 False（T-5.3）。
     """
 
     file_hash: str
@@ -77,6 +78,7 @@ class IndexedFile:
     chunks: int
     pages: int
     created_at: str
+    active: bool = True
 
 
 class QwenEmbeddings(Embeddings):
@@ -205,10 +207,12 @@ class VectorStore:
                     "chunks": 0,
                     "pages": set(),
                     "created_at": meta.get("created_at", "") or "",
+                    "active": True,
                 }
                 groups[key] = group
 
             group["chunks"] += 1
+            group["active"] = group["active"] and bool(meta.get("active", True))
             page = meta.get("page", 0)
             if isinstance(page, int) and page > 0:
                 group["pages"].add(page)
@@ -222,6 +226,7 @@ class VectorStore:
                 chunks=group["chunks"],
                 pages=max(group["pages"]) if group["pages"] else 0,
                 created_at=group["created_at"],
+                active=group["active"],
             )
             for group in groups.values()
         ]
@@ -245,6 +250,60 @@ class VectorStore:
     def count_by_file_hash(self, file_hash: str) -> int:
         """该文件当前在库内的 chunk 数。"""
         return len(self._ids_where({"file_hash": file_hash}))
+
+    def set_file_active(self, file_hash: str, active: bool) -> int:
+        """软删除/恢复：只更新 metadata，不删除向量。
+
+        Returns:
+            实际更新的 chunk 数；文件不存在时返回 0。
+        """
+        ids = self._ids_where({"file_hash": file_hash})
+        if not ids:
+            return 0
+
+        batch_size = 500
+        for start in range(0, len(ids), batch_size):
+            batch = ids[start:start + batch_size]
+            found = self._collection.get(ids=batch, include=["metadatas"])
+            metadatas = []
+            for meta in found.get("metadatas") or []:
+                updated = dict(meta or {})
+                updated["active"] = active
+                metadatas.append(updated)
+            if metadatas:
+                self._collection.update(ids=batch, metadatas=metadatas)
+
+        logger.info("设置文件 active={}: {} -> {} 个 chunk", active, file_hash[:12], len(ids))
+        return len(ids)
+
+    def ensure_active_metadata(self) -> int:
+        """给旧索引补齐 ``active=True`` metadata；不重新嵌入。
+
+        服务器化前的一次性迁移，返回补齐的 chunk 数。
+        """
+        found = self._collection.get(include=["metadatas"])
+        ids = list(found.get("ids") or [])
+        metadatas = list(found.get("metadatas") or [])
+
+        pending_ids: list[str] = []
+        pending_metas: list[dict] = []
+        for chunk_id, meta in zip(ids, metadatas):
+            item = dict(meta or {})
+            if "active" not in item:
+                item["active"] = True
+                pending_ids.append(chunk_id)
+                pending_metas.append(item)
+
+        batch_size = 500
+        for start in range(0, len(pending_ids), batch_size):
+            self._collection.update(
+                ids=pending_ids[start:start + batch_size],
+                metadatas=pending_metas[start:start + batch_size],
+            )
+
+        if pending_ids:
+            logger.info("补齐 active metadata: {} 个 chunk", len(pending_ids))
+        return len(pending_ids)
 
     def index_chunks(
         self,
@@ -396,6 +455,8 @@ class VectorStore:
         query_text: str,
         k: int | None = None,
         where: dict | None = None,
+        *,
+        active_only: bool = True,
     ) -> list[tuple[Document, float]]:
         """相似度检索，返回 ``(Document, cosine 距离)``。
 
@@ -403,14 +464,23 @@ class VectorStore:
             query_text: 查询文本。
             k: 返回条数；缺省用配置 ``TOP_K``。
             where: 可选的 metadata 过滤条件（Chroma where 语法）。
+            active_only: 默认只查 ``active=True`` 的 chunk；软删除文档不会命中。
 
         Returns:
             按距离升序的 ``(Document, distance)``；cosine 距离越小越相似。
         """
         limit = k if k is not None else self._settings.top_k
-        kwargs: dict = {"k": limit}
+        conditions = []
+        if active_only:
+            conditions.append({"active": True})
         if where:
-            kwargs["filter"] = where
+            conditions.append(where)
+
+        kwargs: dict = {"k": limit}
+        if len(conditions) == 1:
+            kwargs["filter"] = conditions[0]
+        elif len(conditions) > 1:
+            kwargs["filter"] = {"$and": conditions}
         return self._store.similarity_search_with_score(query_text, **kwargs)
 
 
