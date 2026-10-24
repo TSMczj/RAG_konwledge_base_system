@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RAG 知识库 · API</title>
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; display: grid; place-items: center;
+      color: #2b2822; font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+      background: radial-gradient(circle at 10% 0%, rgba(180,81,59,.12), transparent 35%),
+                  radial-gradient(circle at 90% 10%, rgba(78,90,67,.12), transparent 30%), #f4ecdc;
+    }
+    main {
+      width: min(620px, calc(100% - 32px)); padding: 40px 32px;
+      border: 1px solid #e8dcc6; border-radius: 22px; background: #fffdf8;
+      box-shadow: 0 22px 60px rgba(70,58,38,.10);
+    }
+    .eyebrow { color: #a89c87; font-family: Consolas, monospace; font-size: 10px; letter-spacing: .16em; }
+    h1 { margin: 8px 0 10px; font-family: "Noto Serif SC", "Songti SC", Georgia, serif; font-size: 28px; }
+    p { margin: 0; color: #7c7464; font-size: 13px; line-height: 1.8; }
+    .actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 22px; }
+    a {
+      padding: 8px 12px; border: 1px solid #e8dcc6; border-radius: 9px;
+      color: #93402e; background: #fbf3e6; font-size: 12px; text-decoration: none;
+    }
+    a.primary { border-color: #b4513b; color: #fff; background: #b4513b; }
+    footer { margin-top: 22px; color: #a89c87; font-size: 10px; }
+    code { font-family: Consolas, monospace; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">RAG KNOWLEDGE BASE</div>
+    <h1>API 已启动</h1>
+    <p>
+      这是 Web 骨架占位页。聊天 UI 还在 <code>prototype/ui</code> 中评审，
+      定稿后会替换本页；当前可以先通过 Swagger 调接口。
+    </p>
+    <div class="actions">
+      <a class="primary" href="/docs">打开 Swagger</a>
+      <a href="/api/v1/health">健康检查</a>
+    </div>
+    <footer>version {{ version }} · 仅监听 127.0.0.1</footer>
+  </main>
+</body>
+</html>
