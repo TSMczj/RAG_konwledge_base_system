@@ -1,6 +1,6 @@
 /* ============================================================
    RAG 知识库 UI
-   聊天页已接 FastAPI /api/v1/chat SSE；文档页与设置页仍为原型 mock。
+   聊天页与文档页已接 FastAPI；设置页仍为原型 mock。
    ============================================================ */
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -13,39 +13,24 @@ const MODELS = {
 };
 const API_MODELS = new Set(["deepseek-v4-flash"]);
 
-const initialSources = [
-  {
-    n: 1,
-    file: "attention is all you need.pdf",
-    page: 5,
-    score: 0.648,
-    meta: "text · 15 页 PDF",
-    excerpt:
-      "The Transformer uses multi-head attention in three different ways: in encoder-decoder attention layers, the queries come from the previous decoder layer and the keys and values come from the encoder output.",
-  },
-  {
-    n: 2,
-    file: "attention is all you need.pdf",
-    page: 2,
-    score: 0.586,
-    meta: "text · 15 页 PDF",
-    excerpt:
-      "The Transformer follows this overall architecture using stacked self-attention and point-wise, fully connected layers for both the encoder and decoder.",
-  },
-];
-
-const demoDocs = [
-  { id: "doc-01", name: "10_项目说明.txt", ext: "txt", pages: "—", chunks: 13, status: "ready", date: "17:50" },
-  { id: "doc-02", name: "2.技术参数.docx", ext: "docx", pages: "—", chunks: 6, status: "ready", date: "17:50" },
-  { id: "doc-03", name: "attention is all you need.pdf", ext: "pdf", pages: 15, chunks: 102, status: "ready", date: "17:50" },
-  { id: "doc-04", name: "bert.pdf", ext: "pdf", pages: 16, chunks: 180, status: "ready", date: "17:50" },
-  { id: "doc-05", name: "gbk.txt", ext: "txt", pages: "—", chunks: 1, status: "ready", date: "17:50" },
-  { id: "doc-06", name: "handbook-872p.docx", ext: "docx", pages: "—", chunks: 2387, status: "ready", date: "17:50" },
-  { id: "doc-07", name: "lm358.pdf", ext: "pdf", pages: 68, chunks: 237, status: "ready", date: "17:52" },
-  { id: "doc-08", name: "nasdaq-tsla-2025-10K-25570807.pdf", ext: "pdf", pages: 113, chunks: 1063, status: "ready", date: "17:54" },
-  { id: "doc-09", name: "UTF-8.txt", ext: "txt", pages: "—", chunks: 1, status: "ready", date: "17:55" },
-  { id: "doc-10", name: "中华人民共和国个人信息保护法.pdf", ext: "pdf", pages: 21, chunks: 31, status: "ready", date: "17:55" },
-];
+async function apiJson(path, options = {}) {
+  const response = await fetch(`/api/v1${path}`, {
+    ...options,
+    headers: { Accept: "application/json", ...(options.headers || {}) },
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    let detail = text;
+    try {
+      const body = JSON.parse(text);
+      detail = body?.detail?.message || body?.detail || body?.message || text;
+    } catch {
+      // keep raw text
+    }
+    throw new Error(`${response.status}${detail ? ` · ${detail}` : ""}`);
+  }
+  return response.json();
+}
 
 const state = {
   view: "chat",
@@ -57,13 +42,9 @@ const state = {
   sources: [],
   sourcesNote: "回答后在这里查看引用来源。",
   activeSource: null,
-  docs: demoDocs.map((doc) => ({
-    ...doc,
-    removed: false,
-    removedAt: "",
-    progress: 100,
-    stage: "已入库",
-  })),
+  docs: [],
+  docsLoading: true,
+  docsError: "",
   docTab: "active",
   keys: {
     deepseek: {
@@ -94,7 +75,7 @@ const state = {
   setupStep: 1,
   setupTested: false,
   search: "",
-  rebuilt: "6m 09s",
+  rebuilt: "—",
   streamTimer: null,
   streamAssistant: null,
   streamFull: "",
@@ -671,115 +652,6 @@ function toggleSourceExpanded(n) {
   if (button) button.textContent = expanded ? "收起原文" : "展开原文";
 }
 
-/* ---------- mock replies ---------- */
-
-function getMockReply(prompt) {
-  const text = prompt.toLowerCase();
-
-  if (/天气|预报|明天.*(股价|新闻)|库外|无关问题|weather|forecast/i.test(text)) {
-    return {
-      text: "当前文档中没有找到足够依据。这个问题可能超出知识库范围，建议补充相关文档，或换一个问法。",
-      citations: [],
-      sources: [],
-      insufficient: true,
-      meta: "未找到依据 · 未生成引用",
-    };
-  }
-
-  if (text.includes("lm358") || text.includes("电源电压") || text.includes("supply voltage") || text.includes("power supply")) {
-    return {
-      text:
-        "LM358 的电源电压范围取决于具体型号：LM358B / LM2904B 为 3 V 到 36 V，LM358 / LM2904 为 3 V 到 30 V，LM2904V 为 3 V 到 26 V。数据手册的规格表同时给出了最小值、最大值和单位，建议以对应型号那一行为准。",
-      citations: [1, 2],
-      sources: [
-        {
-          n: 1,
-          file: "lm358.pdf",
-          page: 5,
-          score: 0.234,
-          meta: "table · 68 页 PDF",
-          excerpt: "|  |  | MIN | MAX | UNIT | ... | V Supply voltage, V+ ... 3 | 36 | V |",
-        },
-        {
-          n: 2,
-          file: "lm358.pdf",
-          page: 4,
-          score: 0.258,
-          meta: "table · 68 页 PDF",
-          excerpt: "Supply voltage, V+ ... LM358B / LM2904B: 3 V to 36 V; LM358 / LM2904: 3 V to 30 V.",
-        },
-      ],
-      meta: "检索 5 个片段 · 首字 0.31s · 完整回答 1.8s",
-    };
-  }
-
-  if (text.includes("个人信息") || text.includes("保护法") || text.includes("personal information") || text.includes("privacy law")) {
-    return {
-      text:
-        "《个人信息保护法》要求处理个人信息遵循合法、正当、必要和诚信原则，并且应当与处理目的直接相关、采取对个人权益影响最小的方式。收集个人信息还应限于实现处理目的的最小范围，不得过度收集。",
-      citations: [1, 2],
-      sources: [
-        {
-          n: 1,
-          file: "中华人民共和国个人信息保护法.pdf",
-          page: 3,
-          score: 0.203,
-          meta: "text · 21 页 PDF",
-          excerpt:
-            "处理个人信息应当遵循合法、正当、必要和诚信原则，不得通过误导、欺诈、胁迫等方式处理个人信息。",
-        },
-        {
-          n: 2,
-          file: "中华人民共和国个人信息保护法.pdf",
-          page: 4,
-          score: 0.205,
-          meta: "text · 21 页 PDF",
-          excerpt:
-            "收集个人信息，应当限于实现处理目的的最小范围，不得过度收集个人信息。",
-        },
-      ],
-      meta: "检索 5 个片段 · 首字 0.28s · 完整回答 1.6s",
-    };
-  }
-
-  if (text.includes("bert") || text.includes("预训练") || text.includes("pre-training") || text.includes("pretraining")) {
-    return {
-      text:
-        "BERT 使用两个预训练任务：掩码语言模型（Masked LM）随机遮住部分 token，让模型根据左右上下文预测；下一句预测（NSP）判断两个句子是否连续。论文还通过消融实验说明这两个任务对最终效果都有贡献。",
-      citations: [1, 2],
-      sources: [
-        {
-          n: 1,
-          file: "bert.pdf",
-          page: 8,
-          score: 0.341,
-          meta: "text · 16 页 PDF",
-          excerpt:
-            "We demonstrate the importance of our pre-training tasks by comparing against several ablations.",
-        },
-        {
-          n: 2,
-          file: "bert.pdf",
-          page: 2,
-          score: 0.373,
-          meta: "text · 16 页 PDF",
-          excerpt:
-            "BERT is designed to pre-train deep bidirectional representations from unlabeled text by jointly conditioning on both left and right context.",
-        },
-      ],
-      meta: "检索 5 个片段 · 首字 0.35s · 完整回答 2.0s",
-    };
-  }
-
-  return {
-    text:
-      "Transformer 采用编码器—解码器堆叠结构。最核心的是多头自注意力机制：它让模型在同一层内同时关注不同位置的信息，并通过残差连接和层归一化稳定训练。与循环网络不同，它不依赖序列顺序递归计算，因此更适合并行训练。",
-    citations: [1, 2],
-    sources: initialSources,
-    meta: "检索 5 个片段 · 首字 0.42s · 完整回答 2.1s",
-  };
-}
-
 function updateComposerState() {
   sendButton.classList.toggle("streaming", state.streaming);
   sendButton.setAttribute("aria-label", state.streaming ? "停止生成" : "发送问题");
@@ -1034,26 +906,77 @@ function closeSources() {
 
 /* ---------- documents ---------- */
 
+function formatApiDate(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString(state.lang === "en" ? "en-US" : "zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function mapApiDocument(item) {
+  const name = item.file_name || "未命名文档";
+  const ext = (item.doc_type || name.split(".").pop() || "txt").toLowerCase();
+  const removed = item.status === "removed";
+  return {
+    id: item.id,
+    name,
+    ext,
+    pages: item.pages || "—",
+    chunks: item.chunks ?? "—",
+    size: item.size,
+    status: removed ? "removed" : "ready",
+    removed,
+    removedAt: item.removed_at || "",
+    progress: 100,
+    stage: removed ? "已移出" : "已入库",
+    date: formatApiDate(item.created_at),
+  };
+}
+
+async function loadDocuments() {
+  state.docsLoading = true;
+  state.docsError = "";
+  try {
+    const data = await apiJson("/documents?status=all&page_size=200");
+    state.docs = (data.items || []).map(mapApiDocument);
+  } catch (error) {
+    state.docsError = error.message;
+    if (!state.docs.length) state.docs = [];
+  } finally {
+    state.docsLoading = false;
+    renderDocs();
+    updateStats();
+  }
+}
+
 function statusLabel(doc) {
   if (doc.removed) return "已移出";
   const labels = {
     queued: "排队中",
+    running: "处理中",
     parsing: "解析中",
     splitting: "分块中",
     embedding: "嵌入中",
     writing: "写入中",
     ready: "已入库",
+    skipped: "已跳过",
+    failed: "失败",
     error: "失败",
   };
   return labels[doc.status] || "已入库";
 }
 
 function isProcessing(doc) {
-  return ["queued", "parsing", "splitting", "embedding", "writing"].includes(doc.status);
+  return ["queued", "running", "parsing", "splitting", "embedding", "writing"].includes(doc.status);
 }
 
 function progressMarkup(doc) {
-  if (doc.status === "error") {
+  if (doc.status === "failed" || doc.status === "error") {
     return `<div class="row-error">${escapeHtml(doc.error || "处理失败")}</div>`;
   }
   if (!isProcessing(doc)) return "";
@@ -1069,7 +992,7 @@ function actionMarkup(doc) {
       <button class="row-action" type="button" data-action="restore" data-id="${escapeHtml(doc.id)}">恢复</button>
       <button class="row-action danger" type="button" data-action="permanent" data-id="${escapeHtml(doc.id)}">彻底删除</button>`;
   }
-  if (doc.status === "error") {
+  if (doc.status === "error" || doc.status === "failed") {
     return `
       <button class="row-action primary" type="button" data-action="retry" data-id="${escapeHtml(doc.id)}">重试</button>
       <button class="row-action danger" type="button" data-action="remove" data-id="${escapeHtml(doc.id)}">移出</button>`;
@@ -1095,6 +1018,16 @@ function renderDocs() {
     tab.classList.toggle("active", active);
     tab.setAttribute("aria-selected", String(active));
   });
+
+  if (state.docsLoading && !state.docs.length) {
+    docsTableBody.innerHTML = `<tr><td colspan="6" class="empty-table">正在读取文档列表…</td></tr>`;
+    return;
+  }
+
+  if (state.docsError && !state.docs.length) {
+    docsTableBody.innerHTML = `<tr><td colspan="6" class="empty-table">读取文档失败：${escapeHtml(state.docsError.slice(0, 300))}</td></tr>`;
+    return;
+  }
 
   if (!docs.length) {
     const message = isRemovedTab
@@ -1141,26 +1074,40 @@ function removeDoc(id) {
       <p>将 <strong>${escapeHtml(doc.name)}</strong> 从检索结果和“已入库”列表中移出。</p>
       <p class="modal-warning">原文件和向量都会保留，可随时在“已移出”中恢复；不会删除原文件（<code>data/uploads</code>）。</p>`,
     confirmText: "移出",
-    onConfirm: () => {
-      doc.removed = true;
-      doc.removedAt = nowLabel();
-      state.docTab = "removed";
-      renderDocs();
-      updateStats();
-      closeModal();
-      showToast(`已移出知识库：${doc.name}，可在“已移出”中恢复或彻底删除`);
+    onConfirm: async () => {
+      try {
+        await apiJson(`/documents/${encodeURIComponent(id)}`, { method: "DELETE" });
+        doc.removed = true;
+        doc.removedAt = nowLabel();
+        doc.status = "removed";
+        doc.stage = "已移出";
+        state.docTab = "removed";
+        renderDocs();
+        updateStats();
+        closeModal();
+        showToast(`已移出知识库：${doc.name}，可在“已移出”中恢复或彻底删除`);
+      } catch (error) {
+        showToast(`移出失败：${error.message}`, "error");
+      }
     },
   });
 }
 
-function restoreDoc(id) {
+async function restoreDoc(id) {
   const doc = state.docs.find((item) => item.id === id);
   if (!doc) return;
-  doc.removed = false;
-  doc.removedAt = "";
-  renderDocs();
-  updateStats();
-  showToast(`已恢复到知识库：${doc.name}`);
+  try {
+    await apiJson(`/documents/${encodeURIComponent(id)}/restore`, { method: "POST" });
+    doc.removed = false;
+    doc.removedAt = "";
+    doc.status = "ready";
+    doc.stage = "已入库";
+    renderDocs();
+    updateStats();
+    showToast(`已恢复到知识库：${doc.name}`);
+  } catch (error) {
+    showToast(`恢复失败：${error.message}`, "error");
+  }
 }
 
 function permanentlyDeleteDoc(id) {
@@ -1174,12 +1121,17 @@ function permanentlyDeleteDoc(id) {
       <p class="modal-warning">此操作不可恢复。如果只是暂时不想检索它，请使用“移出知识库”。</p>`,
     confirmText: "彻底删除",
     danger: true,
-    onConfirm: () => {
-      state.docs = state.docs.filter((item) => item.id !== id);
-      renderDocs();
-      updateStats();
-      closeModal();
-      showToast(`已彻底删除：${doc.name}`);
+    onConfirm: async () => {
+      try {
+        await apiJson(`/documents/${encodeURIComponent(id)}/permanent`, { method: "DELETE" });
+        state.docs = state.docs.filter((item) => item.id !== id);
+        renderDocs();
+        updateStats();
+        closeModal();
+        showToast(`已彻底删除：${doc.name}`);
+      } catch (error) {
+        showToast(`删除失败：${error.message}`, "error");
+      }
     },
   });
 }
@@ -1190,135 +1142,135 @@ function switchDocTab(tab) {
   updateStats();
 }
 
-function simulateUpload(doc, file) {
-  let progress = 0;
-  const isPdf = doc.ext === "pdf";
-  const totalPages = isPdf ? 68 : 12;
-  const totalBatches = Math.max(4, Math.min(36, Math.ceil((file.size || 24000) / 24000)));
-  const willFail = !doc.retried && (
-    file.size === 0 || /扫描件|fail|corrupt|scan/i.test(file.name || "")
-  );
-
-  const timer = window.setInterval(() => {
-    progress = Math.min(100, progress + 1.4 + Math.random() * 2.8);
-
-    if (willFail && progress >= 52) {
-      window.clearInterval(timer);
-      doc.status = "error";
-      doc.progress = 52;
-      doc.stage = "解析失败";
-      doc.error = "未检测到可入库文本，可能是扫描件或文件损坏";
-      doc.chunks = "—";
-      renderDocs();
-      updateStats();
-      showToast(`入库失败：${file.name}，可点击重试`, "error");
-      return;
-    }
-
-    if (progress >= 100) {
-      window.clearInterval(timer);
-      doc.status = "ready";
-      doc.progress = 100;
-      doc.stage = "已入库";
-      doc.error = "";
-      doc.pages = isPdf ? totalPages : "—";
-      doc.chunks = Math.max(1, Math.min(120, Math.round((file.size || 24000) / 18000) || 1));
-      renderDocs();
-      updateStats();
-      showToast(`${file.name} 已入库`);
-      return;
-    }
-
-    doc.progress = Math.round(progress);
-    if (progress < 8) {
-      doc.status = "queued";
-      doc.stage = "排队中";
-    } else if (progress < 34) {
-      doc.status = "parsing";
-      const page = Math.max(1, Math.ceil(((progress - 8) / 26) * totalPages));
-      doc.stage = `解析中 · 第 ${page} / ${totalPages} 页`;
-    } else if (progress < 48) {
-      doc.status = "splitting";
-      const chunks = Math.max(1, Math.ceil(((progress - 34) / 14) * 24));
-      doc.stage = `分块中 · 已生成 ${chunks} / 24 个文本片段`;
-    } else if (progress < 92) {
-      doc.status = "embedding";
-      const batch = Math.max(1, Math.ceil(((progress - 48) / 44) * totalBatches));
-      doc.stage = `嵌入中 · 第 ${batch} / ${totalBatches} 批`;
-    } else {
-      doc.status = "writing";
-      doc.stage = "写入中 · 正在写入向量库";
-    }
-    renderDocs();
-  }, 120);
-}
-
 function retryDoc(id) {
   const doc = state.docs.find((item) => item.id === id);
-  if (!doc || doc.status !== "error") return;
-  doc.retried = true;
-  doc.status = "queued";
-  doc.progress = 0;
-  doc.stage = "重新排队";
-  doc.error = "";
-  doc.chunks = "—";
+  if (!doc || !["error", "failed"].includes(doc.status)) return;
+  if (!doc.file) {
+    showToast("无法重试：浏览器没有保留原文件，请重新上传", "error");
+    return;
+  }
+  state.docs = state.docs.filter((item) => item.id !== id);
   renderDocs();
+  updateStats();
   showToast(`重新尝试：${doc.name}`);
-  simulateUpload(doc, doc.file || { size: 24000, name: doc.name });
+  handleUpload([doc.file]);
 }
 
-function startRebuild() {
+function formatJobDuration(job) {
+  const start = new Date(job.created_at).getTime();
+  const end = new Date(job.updated_at).getTime();
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return "刚刚";
+  const seconds = Math.max(1, Math.round((end - start) / 1000));
+  return seconds >= 60 ? `${Math.floor(seconds / 60)}m ${seconds % 60}s` : `${seconds}s`;
+}
+
+async function startRebuild() {
   closeModal();
   const button = $("#rebuildButton");
   button.disabled = true;
-  const activeDocs = state.docs.filter((doc) => !doc.removed);
-  const total = Math.max(activeDocs.length, 1);
-  let value = 0;
 
-  openModal({
-    title: "正在重建索引",
-    body: `
-      <p>会清空当前可检索索引，并重新解析、嵌入全部已入库文档。</p>
-      <div class="progress-wrap">
-        <div class="progress-track"><div class="progress-bar" id="rebuildBar"></div></div>
-        <div class="progress-label"><span id="rebuildPct">0%</span><span id="rebuildTotal">0 / ${total} 份</span></div>
-      </div>
-      <div class="progress-file" id="rebuildFile">准备中…</div>
-      <p class="modal-warning">原型演示：这里模拟约 6 分钟的重建过程，不会真的调用嵌入接口。</p>`,
-    showFooter: false,
-  });
-
-  const timer = window.setInterval(() => {
-    value = Math.min(100, value + 4 + Math.random() * 5);
-    const bar = $("#rebuildBar");
-    const pct = $("#rebuildPct");
-    const totalEl = $("#rebuildTotal");
-    const fileEl = $("#rebuildFile");
-    if (!bar) {
-      window.clearInterval(timer);
-      return;
-    }
-    bar.style.width = `${value}%`;
-    pct.textContent = `${Math.round(value)}%`;
-    const done = Math.min(total, Math.ceil((value / 100) * total));
-    totalEl.textContent = `${done} / ${total} 份`;
-    const current = activeDocs[Math.min(done, total - 1)];
-    fileEl.textContent = current ? `正在处理：${current.name}` : "正在写入向量库…";
-
-    if (value >= 100) {
-      window.clearInterval(timer);
-      window.setTimeout(() => {
-        closeModal();
-        button.disabled = false;
-        state.rebuilt = "刚刚";
-        updateStats();
-        showToast("索引重建完成");
-      }, 420);
-    }
-  }, 280);
+  try {
+    const job = await apiJson("/index/rebuild", { method: "POST" });
+    openModal({
+      title: "正在重建索引",
+      body: `
+        <p>正在清空并重新解析、嵌入全部已入库文档。</p>
+        <div class="progress-wrap">
+          <div class="progress-track"><div class="progress-bar" id="rebuildBar"></div></div>
+          <div class="progress-label"><span id="rebuildPct">0%</span><span id="rebuildTotal">准备中…</span></div>
+        </div>
+        <div class="progress-file" id="rebuildFile">等待任务启动…</div>
+        <p class="modal-warning">重建期间问答可能不可用；会重新消耗嵌入额度。</p>`,
+      showFooter: false,
+    });
+    pollRebuildJob(job.job_id, button);
+  } catch (error) {
+    button.disabled = false;
+    showToast(`重建失败：${error.message}`, "error");
+  }
 }
 
-function handleUpload(files) {
+async function pollRebuildJob(jobId, button) {
+  try {
+    const job = await apiJson(`/index/jobs/${encodeURIComponent(jobId)}`);
+    const bar = $("#rebuildBar");
+    if (!bar) {
+      button.disabled = false;
+      return;
+    }
+
+    const percent = Math.max(0, Math.min(100, Number(job.percent) || 0));
+    bar.style.width = `${percent}%`;
+    $("#rebuildPct").textContent = `${percent}%`;
+    $("#rebuildTotal").textContent = job.total
+      ? `${job.current || 0} / ${job.total} 份`
+      : "准备中…";
+    $("#rebuildFile").textContent = job.message || job.stage || "正在处理…";
+
+    if (job.state === "ready") {
+      closeModal();
+      button.disabled = false;
+      state.rebuilt = formatJobDuration(job);
+      await loadDocuments();
+      updateStats();
+      showToast("索引重建完成");
+      return;
+    }
+    if (job.state === "failed") {
+      closeModal();
+      button.disabled = false;
+      await loadDocuments();
+      showToast(`重建失败：${job.error || job.message || "未知错误"}`, "error");
+      return;
+    }
+
+    window.setTimeout(() => pollRebuildJob(jobId, button), 700);
+  } catch (error) {
+    closeModal();
+    button.disabled = false;
+    showToast(`查询重建状态失败：${error.message}`, "error");
+  }
+}
+
+async function pollUploadJob(doc) {
+  if (!state.docs.some((item) => item.id === doc.id)) return;
+  try {
+    const job = await apiJson(`/documents/uploads/${encodeURIComponent(doc.jobId)}`);
+    doc.status = job.state || "queued";
+    doc.progress = Number(job.percent) || 0;
+    doc.stage = job.stage || statusLabel(doc);
+    if (job.unit === "chunk" && job.total) doc.chunks = job.total;
+    if (job.error) doc.error = job.error;
+
+    if (doc.status === "ready") {
+      renderDocs();
+      updateStats();
+      showToast(`${doc.name} 已入库`);
+      await loadDocuments();
+      return;
+    }
+    if (doc.status === "failed" || doc.status === "skipped") {
+      doc.status = "failed";
+      doc.error = job.error || job.message || "处理失败";
+      renderDocs();
+      updateStats();
+      showToast(`入库失败：${doc.name}`, "error");
+      return;
+    }
+
+    renderDocs();
+    updateStats();
+    window.setTimeout(() => pollUploadJob(doc), 700);
+  } catch (error) {
+    doc.status = "failed";
+    doc.error = error.message;
+    renderDocs();
+    updateStats();
+    showToast(`查询入库状态失败：${error.message}`, "error");
+  }
+}
+
+async function handleUpload(files) {
   if (!state.keys.dashscope.configured) {
     showKeyError(
       "无法上传文档",
@@ -1338,30 +1290,42 @@ function handleUpload(files) {
     return;
   }
 
-  accepted.forEach((file, index) => {
-    const ext = file.name.split(".").pop().toLowerCase();
-    const doc = {
-      id: `upload-${Date.now()}-${index}`,
-      name: file.name,
-      ext,
-      pages: "—",
-      chunks: "—",
-      status: "queued",
-      progress: 0,
-      stage: "排队中",
-      removed: false,
-      removedAt: "",
-      retried: false,
-      file,
-      date: nowLabel(),
-    };
-    state.docs.unshift(doc);
+  const formData = new FormData();
+  accepted.forEach((file) => formData.append("files", file, file.name));
+
+  try {
+    const result = await apiJson("/documents/upload", { method: "POST", body: formData });
+    const jobs = result.jobs || [];
+    jobs.forEach((job) => {
+      const file = accepted.find((item) => item.name === job.file_name) || accepted[0];
+      const ext = (file?.name.split(".").pop() || "txt").toLowerCase();
+      const doc = {
+        id: `job-${job.job_id}`,
+        jobId: job.job_id,
+        name: job.file_name || file?.name || "未命名文档",
+        ext,
+        pages: "—",
+        chunks: "—",
+        status: "queued",
+        progress: 0,
+        stage: "排队中",
+        removed: false,
+        removedAt: "",
+        error: "",
+        retried: false,
+        file,
+        date: nowLabel(),
+      };
+      state.docs.unshift(doc);
+      pollUploadJob(doc);
+    });
     state.docTab = "active";
     renderDocs();
     updateStats();
-    showToast(`已加入解析队列：${file.name}`);
-    simulateUpload(doc, file);
-  });
+    showToast(`已加入解析队列：${accepted.length} 个文件`);
+  } catch (error) {
+    showToast(`上传失败：${error.message}`, "error");
+  }
 }
 
 /* ---------- modal / toast ---------- */
@@ -1580,7 +1544,7 @@ $("#rebuildButton").addEventListener("click", () => {
     title: "重建整个索引？",
     body: `
       <p>这会清空当前索引并重新解析、嵌入 <strong>${activeDocs.length}</strong> 份已入库文档（共<strong>${formatNumber(total)}</strong> 个文本片段）。</p>
-      <p class="modal-warning">重建期间问答可能不可用；会重新消耗嵌入额度。原型中会模拟约 6 分钟。</p>`,
+      <p class="modal-warning">重建期间问答可能不可用；会重新消耗嵌入额度。</p>`,
     confirmText: "开始重建",
     danger: true,
     onConfirm: startRebuild,
@@ -1613,6 +1577,7 @@ updateStats();
 updateComposerState();
 autoResizeTextarea();
 refreshKeyStateUI();
+loadDocuments();
 
 const initialView = new URLSearchParams(window.location.search).get("view");
 if (initialView === "documents") switchView("documents");
