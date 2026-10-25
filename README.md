@@ -6,7 +6,7 @@
 
 **定位**：单用户、本地运行、不对外发布。
 
-**当前状态**：M1（文档索引）和 M2（检索生成）已完成，M3 Web API 已完成到聊天 SSE；UI 壳已从 `prototype/ui` 迁入 `templates/` + `app/static/`，但聊天页仍使用 mock 数据，T-5.5 还需要接 `/chat` SSE。因此现在可以通过 CLI 和 `/docs` 使用完整问答链路，网页端处于“界面已定稿、数据待接通”的状态。
+**当前状态**：M1（文档索引）和 M2（检索生成）已完成，M3 Web API 已完成到聊天 SSE；UI 壳已从 `prototype/ui` 迁入 `templates/` + `app/static/`，聊天页已接 `/api/v1/chat` SSE，来源面板接真实 `sources`。文档页和设置页仍是 mock，真实问答需先在系统环境变量配置 DeepSeek / DashScope Key。
 
 ---
 
@@ -33,7 +33,7 @@
 | 兜底防幻觉 | ✅ 已实现 | 无有效引用时返回“知识库中没有相关信息。” |
 | 文档管理 API | ✅ 已实现 | 列表 / 上传 job / 软删除 / 恢复 / 彻底删除 / 重建 |
 | Web API | ✅ 已实现 | FastAPI + SSE；`/docs` 可调通已实现接口 |
-| Web 页面 | 🟡 进行中 | UI 壳已迁入 `templates/`；聊天仍为 mock，T-5.5 待接 SSE |
+| Web 页面 | 🟡 进行中 | 聊天页已接 SSE + 来源；文档/设置页仍为 mock |
 | 多轮对话 | ⏳ 未开始 | Sprint 4（T-6） |
 | 一键启动脚本 | ⏳ 未实现 | Sprint 4（T-7.2） |
 
@@ -121,7 +121,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 启动后：
 
-- 首页：<http://127.0.0.1:8000/>（定稿 UI 壳；聊天暂为 mock，待接 SSE）
+- 首页：<http://127.0.0.1:8000/>（聊天页已接 SSE；文档/设置页仍为 mock）
 - Swagger：<http://127.0.0.1:8000/docs>
 - 健康检查：<http://127.0.0.1:8000/api/v1/health>
 
@@ -173,7 +173,7 @@ python -m http.server 8765 --bind 127.0.0.1 --directory prototype/ui
 # http://127.0.0.1:8765/
 ```
 
-正式页面的 UI 壳已迁入 `templates/` 和 `app/static/`，但聊天数据仍是 mock；T-5.5 接 `/chat` SSE 后才会使用真实回答。`prototype/ui` 仅保留用于对照设计，不再作为运行页面。
+正式页面的聊天页已接 `/api/v1/chat` SSE 和真实来源数据；文档页、设置页仍是 mock。真实问答需要在启动前配置好系统环境变量 `DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY`。`prototype/ui` 仅保留用于对照设计，不再作为运行页面。
 
 ---
 

@@ -1,6 +1,6 @@
 /* ============================================================
-   RAG 知识库 UI 原型
-   纯前端 mock：不请求后端，只用于确认布局 / 引用 / 流式交互。
+   RAG 知识库 UI
+   聊天页已接 FastAPI /api/v1/chat SSE；文档页与设置页仍为原型 mock。
    ============================================================ */
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -11,6 +11,7 @@ const MODELS = {
   "gpt-4.1-mini": { provider: "openai", label: "GPT-4.1 mini" },
   "claude-sonnet-4": { provider: "anthropic", label: "Claude Sonnet 4" },
 };
+const API_MODELS = new Set(["deepseek-v4-flash"]);
 
 const initialSources = [
   {
@@ -51,26 +52,11 @@ const state = {
   lang: window.I18n?.getLanguage?.() || "zh",
   model: localStorage.getItem("rag-ui-model") || "deepseek-v4-flash",
   streaming: false,
-  conversation: [
-    {
-      role: "user",
-      text: "Transformer 的核心结构是什么？",
-      time: "刚刚",
-    },
-    {
-      role: "assistant",
-      text:
-        "Transformer 采用编码器—解码器堆叠结构。编码器和解码器都由多层自注意力与前馈网络组成，最核心的是多头自注意力机制：它让模型在同一层内同时关注不同位置的信息，再通过残差连接和层归一化稳定训练。",
-      citations: [1, 2],
-      sources: initialSources,
-      model: "deepseek-v4-flash",
-      meta: "检索 5 个片段 · 首字 0.42s · 完整回答 2.1s",
-      time: "刚刚",
-    },
-  ],
-  sources: initialSources,
-  sourcesNote: "",
-  activeSource: 1,
+  abortController: null,
+  conversation: [],
+  sources: [],
+  sourcesNote: "回答后在这里查看引用来源。",
+  activeSource: null,
   docs: demoDocs.map((doc) => ({
     ...doc,
     removed: false,
@@ -201,7 +187,7 @@ function modelLabel(id) {
 }
 
 function modelAvailable(id) {
-  return Boolean(state.keys[modelDef(id).provider]?.configured);
+  return API_MODELS.has(id) && Boolean(state.keys[modelDef(id).provider]?.configured);
 }
 
 function updateModelSelect() {
@@ -220,6 +206,11 @@ function updateModelSelect() {
 }
 
 function handleModelChange(next) {
+  if (!API_MODELS.has(next)) {
+    showToast("多模型适配中，当前仅支持 DeepSeek", "error");
+    updateModelSelect();
+    return;
+  }
   if (!modelAvailable(next)) {
     showToast("该模型尚未配置 Key，请先去设置", "error");
     updateModelSelect();
@@ -800,10 +791,14 @@ function finishStreaming(stopped = false) {
     window.clearInterval(state.streamTimer);
     state.streamTimer = null;
   }
+  if (stopped && state.abortController) {
+    state.abortController.abort();
+    state.abortController = null;
+  }
   if (!state.streamAssistant) return;
 
   const assistant = state.streamAssistant;
-  assistant.text = assistant.text || (stopped ? "（已停止）" : state.streamFull);
+  if (!assistant.text) assistant.text = stopped ? "（已停止）" : "（未返回内容）";
   assistant.streaming = false;
   assistant.citations = assistant.citations || [];
   assistant.meta = stopped
@@ -817,34 +812,155 @@ function finishStreaming(stopped = false) {
   renderSources();
 }
 
-function startStreaming(reply) {
-  state.streaming = true;
-  state.streamFull = reply.text;
-  state.streamIndex = 0;
-  state.streamDone = false;
-  state.streamAssistant = state.conversation[state.conversation.length - 1];
-  state.streamAssistant.sources = reply.sources;
-  state.streamAssistant.citations = reply.citations;
-  state.streamAssistant.insufficient = Boolean(reply.insufficient);
-  state.streamAssistant.meta = "正在生成回答…";
-  state.sources = reply.sources;
-  state.sourcesNote = reply.insufficient ? "本轮没有找到可核对的引用。" : "";
-  state.activeSource = 1;
-  renderSources();
-  renderConversation();
-  updateComposerState();
+function parseSseBlock(block) {
+  let event = "message";
+  const data = [];
+  block.split("\n").forEach((line) => {
+    if (line.startsWith("event:")) event = line.slice(6).trim();
+    if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+  });
+  if (!data.length) return null;
+  try {
+    return { event, data: JSON.parse(data.join("\n")) };
+  } catch {
+    return null;
+  }
+}
 
-  state.streamTimer = window.setInterval(() => {
-    if (!state.streamAssistant) return;
-    state.streamIndex = Math.min(state.streamIndex + 4, state.streamFull.length);
-    state.streamAssistant.text = state.streamFull.slice(0, state.streamIndex);
+function mapApiSource(source) {
+  const name = source.file_name || "未命名文档";
+  const ext = name.includes(".") ? name.split(".").pop().toUpperCase() : "文档";
+  return {
+    n: Number(source.n),
+    file: name,
+    page: source.page,
+    score: Number(source.score) || 0,
+    meta: `${source.kind || "text"} · ${ext}`,
+    excerpt: source.excerpt || "",
+  };
+}
+
+function parseAnswerCitations(answer, sources) {
+  const valid = new Set((sources || []).map((source) => source.n));
+  const found = [...String(answer || "").matchAll(/\[(\d+)\]/g)]
+    .map((match) => Number(match[1]))
+    .filter((n) => valid.has(n));
+  return [...new Set(found)];
+}
+
+function formatSeconds(ms) {
+  return (Math.max(0, Number(ms) || 0) / 1000).toFixed(1);
+}
+
+function chatMeta(payload, sources) {
+  const timings = payload.timings || {};
+  if (!sources.length) return "未找到依据 · 未生成引用";
+  return `检索 ${sources.length} 个片段 · 首字 ${formatSeconds(timings.ttft_ms)}s · 完整回答 ${formatSeconds(timings.total_ms)}s`;
+}
+
+function handleChatEvent(event, payload, assistant) {
+  if (event === "sources") {
+    const sources = (payload.sources || []).map(mapApiSource);
+    assistant.sources = sources;
+    state.sources = sources;
+    state.sourcesNote = sources.length ? "" : "本轮没有找到可核对的引用。";
+    state.activeSource = sources[0]?.n ?? null;
+    renderSources();
     renderConversation();
+    return;
+  }
 
-    if (state.streamIndex >= state.streamFull.length) {
-      state.streamAssistant.meta = reply.meta;
-      finishStreaming(false);
+  if (event === "delta") {
+    assistant.text += payload.text || "";
+    assistant.meta = "正在生成回答…";
+    renderConversation();
+    return;
+  }
+
+  if (event === "done") {
+    if (typeof payload.answer === "string") assistant.text = payload.answer;
+    assistant.citations = parseAnswerCitations(assistant.text, assistant.sources);
+    assistant.insufficient = Boolean(payload.fallback) || assistant.sources.length === 0;
+    assistant.meta = chatMeta(payload, assistant.sources);
+    finishStreaming(false);
+    return;
+  }
+
+  if (event === "error") {
+    throw new Error(payload.message || "生成失败");
+  }
+}
+
+async function streamChatFromApi(question, assistant) {
+  const controller = new AbortController();
+  state.abortController = controller;
+  let sawDone = false;
+
+  try {
+    const response = await fetch("/api/v1/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+      body: JSON.stringify({ question }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const body = await response.json();
+        detail = body?.detail?.message || body?.detail || "";
+      } catch {
+        detail = await response.text();
+      }
+      throw new Error(`${response.status}${detail ? ` · ${detail}` : ""}`);
     }
-  }, 24);
+    if (!response.body) throw new Error("浏览器不支持流式响应");
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      buffer = buffer.replace(/\r\n/g, "\n");
+
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary >= 0) {
+        const block = buffer.slice(0, boundary).trim();
+        buffer = buffer.slice(boundary + 2);
+        if (block) {
+          const parsed = parseSseBlock(block);
+          if (parsed) {
+            if (parsed.event === "done") sawDone = true;
+            handleChatEvent(parsed.event, parsed.data, assistant);
+          }
+        }
+        boundary = buffer.indexOf("\n\n");
+      }
+    }
+
+    if (!sawDone && state.streamAssistant === assistant) {
+      throw new Error("连接提前结束");
+    }
+  } catch (error) {
+    if (controller.signal.aborted || state.streamAssistant !== assistant) return;
+    assistant.streaming = false;
+    assistant.text = `请求失败：${error.message}`;
+    assistant.meta = "生成失败";
+    assistant.citations = [];
+    assistant.sources = [];
+    state.streaming = false;
+    state.streamAssistant = null;
+    state.sources = [];
+    state.sourcesNote = "生成失败，未获取引用。";
+    updateComposerState();
+    renderConversation();
+    renderSources();
+  } finally {
+    if (state.abortController === controller) state.abortController = null;
+  }
 }
 
 function sendMessage(rawText) {
@@ -882,17 +998,14 @@ function sendMessage(rawText) {
   autoResizeTextarea();
   renderConversation();
   renderSources();
-
-  const reply = getMockReply(text);
-  window.setTimeout(() => {
-    if (state.streamAssistant !== assistant || !assistant.streaming) return;
-    startStreaming(reply);
-  }, 520);
+  streamChatFromApi(text, assistant);
 }
 
 function clearChat() {
   if (state.streamTimer) window.clearInterval(state.streamTimer);
+  if (state.abortController) state.abortController.abort();
   state.streamTimer = null;
+  state.abortController = null;
   state.streaming = false;
   state.streamAssistant = null;
   state.conversation = [];

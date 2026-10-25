@@ -273,12 +273,13 @@
   - 交付：`templates/index.html` —— 输入框、流式回答区、清空会话
   - 依赖：T-5.1
   - 验收：页面可提交问题并显示流式回答
-  - 状态：定稿 UI 已迁入 `templates/index.html` + `app/static/`；目前仍是 mock，待接 `/chat` SSE 后勾选
+  - 状态：定稿 UI 已迁入 `templates/index.html` + `app/static/`；`/api/v1/chat` SSE 已接入，浏览器 mock SSE 已验证 `sources → delta → done`；真实 Key 联调待环境变量配置
 
 - [ ] **T-5.6 来源展示组件** `M` （FR-09）
   - 交付：引用列表（`[n] 文件名 · 第 x 页`）+ 点击展开原文
   - 依赖：T-5.5、T-4.5
   - 验收：文件名与页码与库内元数据一致
+  - 状态：已接 SSE `sources` 事件并映射 `file_name/page/kind/score/excerpt`；浏览器 mock SSE 已验证来源卡片与引用编号
 
 - [ ] **T-5.7 文档管理页** `M` （FR-11）
   - 交付：`templates/documents.html` —— 上传控件、文档列表、删除、重建按钮
