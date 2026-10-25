@@ -7,8 +7,8 @@
 >
 > | 项 | 值 |
 > |---|---|
-> | 状态 | **M1 归档快照**（不代表当前 M2/M3 状态） |
-> | 适用阶段 | Sprint 0 ~ Sprint 1（项目初始化 / 文档摄入与索引 M1） |
+> | 状态 | **Sprint 0–2 归档快照**（不代表当前 M3/M4 状态） |
+> | 适用阶段 | Sprint 0 ~ Sprint 2（项目初始化 / 文档摄入与索引 M1 / 检索生成 M2） |
 > | 代码基线 | `4e7b8b7`（T-3.6 修复，已推送） |
 > | 测试 | `63 passed`（归档时点） |
 > | 当前主库 | 10 个文件 / 4021 个 chunk |
@@ -97,7 +97,7 @@
 | VEC-01 | `count()` 正常，重启报 HNSW 加载失败 | 索引不可用 | Chroma 1.5.9 在中文路径下不写 HNSW `.bin` | 已修复（ASCII 目录联接） |
 | VEC-02 | 客户端未关闭 / API 不兼容 | HNSW 可能未完整落盘；调用报错 | Chroma 客户端需显式 close；langchain-chroma 无公开 upsert/count | 已修复 |
 | QUOTA-01 | 1M 嵌入额度接近用完 | 不能反复全量重建 | 多次修复重建 + `--rebuild` 重复嵌入 | 已解决（充值后全量重建 4021→4021） |
-| MODEL-01 | DeepSeek 默认思考模式 | 响应慢、token 高、小 `max_tokens` 正文为空 | `deepseek-v4-flash` 默认返回 `reasoning_content` | 已知，T-4.4 处理 |
+| MODEL-01 | DeepSeek 默认思考模式 | 响应慢、token 高、小 `max_tokens` 正文为空 | `deepseek-v4-flash` 默认返回 `reasoning_content` | 已修复（T-4.4 显式关闭 thinking） |
 | TEST-01 | 测试夹具与真实契约不一致 | 误报代码 bug | 合成表格行数不对；`hash-a` 不是 64 位十六进制 | 已修复 |
 | BUILD-01 | 后台建库“退出码 1” | 误判建库失败并重跑 | PowerShell 把 stderr 包装成 NativeCommandError；stdout 被缓冲 | 已规避 |
 
@@ -875,8 +875,8 @@ Get-ChildItem data\chroma -Recurse -File |
 | 纯图片扫描件 | 无文本层，空结果 + 告警 | V1 不做 OCR；需要时单独接 OCR |
 | Chroma 中文路径 | 用 ASCII 目录联接规避 | 换机器/迁移时必须重建联接 |
 | 1M 嵌入额度 | 已充值并完成全量重建（4021→4021） | 后续按需重建，仍不反复 `--force` / `--rebuild` |
-| DeepSeek 思考模式 | 尚未在生成客户端关闭 | T-4.4 显式关闭或接受开销 |
-| T-3.6 任务状态 | 已完成（M1 出口验收） | 后续进入 Sprint 2 · T-4.1 |
+| DeepSeek 思考模式 | 已在 T-4.4 的生成客户端中关闭 | 保持关闭；如未来开启需评估延迟/token |
+| T-3.6 任务状态 | 已完成（M1 出口验收） | 后续 Sprint 2 已完成；当前 V1 已交付 |
 
 ---
 
