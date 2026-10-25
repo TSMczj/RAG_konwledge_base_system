@@ -3,47 +3,387 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>RAG 知识库 · API</title>
-  <style>
-    :root { color-scheme: light; }
-    * { box-sizing: border-box; }
-    body {
-      margin: 0; min-height: 100vh; display: grid; place-items: center;
-      color: #2b2822; font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
-      background: radial-gradient(circle at 10% 0%, rgba(180,81,59,.12), transparent 35%),
-                  radial-gradient(circle at 90% 10%, rgba(78,90,67,.12), transparent 30%), #f4ecdc;
-    }
-    main {
-      width: min(620px, calc(100% - 32px)); padding: 40px 32px;
-      border: 1px solid #e8dcc6; border-radius: 22px; background: #fffdf8;
-      box-shadow: 0 22px 60px rgba(70,58,38,.10);
-    }
-    .eyebrow { color: #a89c87; font-family: Consolas, monospace; font-size: 10px; letter-spacing: .16em; }
-    h1 { margin: 8px 0 10px; font-family: "Noto Serif SC", "Songti SC", Georgia, serif; font-size: 28px; }
-    p { margin: 0; color: #7c7464; font-size: 13px; line-height: 1.8; }
-    .actions { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 22px; }
-    a {
-      padding: 8px 12px; border: 1px solid #e8dcc6; border-radius: 9px;
-      color: #93402e; background: #fbf3e6; font-size: 12px; text-decoration: none;
-    }
-    a.primary { border-color: #b4513b; color: #fff; background: #b4513b; }
-    footer { margin-top: 22px; color: #a89c87; font-size: 10px; }
-    code { font-family: Consolas, monospace; }
-  </style>
+  <title>RAG 知识库</title>
+  <meta name="description" content="本地 RAG 知识库问答系统：聊天、引用溯源、文档管理">
+  <meta name="app-version" content="{{ version }}">
+  <link rel="icon" href="/static/assets/favicon.png">
+  <link rel="stylesheet" href="/static/styles.css">
 </head>
-<body>
-  <main>
-    <div class="eyebrow">RAG KNOWLEDGE BASE</div>
-    <h1>API 已启动</h1>
-    <p>
-      这是 Web 骨架占位页。聊天 UI 还在 <code>prototype/ui</code> 中评审，
-      定稿后会替换本页；当前可以先通过 Swagger 调接口。
-    </p>
-    <div class="actions">
-      <a class="primary" href="/docs">打开 Swagger</a>
-      <a href="/api/v1/health">健康检查</a>
+<body data-view="chat">
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">
+          <img src="/static/assets/logo-mark.svg" alt="">
+        </div>
+        <div class="brand-copy">
+          <div class="brand-line">
+            <h1>RAG 知识库</h1>
+            <span class="proto-badge">本地版</span>
+          </div>
+          <p>万卷为门，开卷见天。</p>
+        </div>
+      </div>
+
+      <nav class="view-tabs" aria-label="主导航">
+        <button class="view-tab active" type="button" data-view="chat" aria-selected="true">对话</button>
+        <button class="view-tab" type="button" data-view="documents" aria-selected="false">文档管理</button>
+      </nav>
+
+      <div class="topbar-right">
+        <div class="index-pill" title="当前本地索引状态">
+          <span class="dot"></span>
+          <span>索引就绪</span>
+          <strong id="topChunkCount">4,021</strong>
+          <span>文本片段</span>
+        </div>
+        <button class="lang-button" id="langButton" type="button" title="切换到 English" aria-label="切换到 English">EN</button>
+        <button class="icon-button clear-chat" id="clearChatTop" type="button" title="清空会话" aria-label="清空会话">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 4v5h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M5.7 9a7.5 7.5 0 1 1-.7 5.2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </button>
+        <button class="icon-button settings-button" id="settingsButton" type="button" title="API 与设置" aria-label="打开设置">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+            <circle cx="12" cy="12" r="3.1" stroke="currentColor" stroke-width="1.5"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <main class="main">
+      <section id="chatView" class="view active" aria-label="对话">
+        <div class="chat-layout">
+          <section class="chat-panel">
+            <div class="chat-head">
+              <div class="chat-heading">
+                <span class="eyebrow">CHAT</span>
+                <h2>知识库对话</h2>
+                <p id="chatSubtitle">基于 10 份文档回答，引用可以展开核对原文</p>
+              </div>
+              <div class="chat-head-actions">
+                <button class="soft-button mobile-sources" id="sourcesToggle" type="button">
+                  来源 <span id="mobileSourceCount">2</span>
+                </button>
+                <span class="live-pill"><span class="dot"></span>流式输出</span>
+              </div>
+            </div>
+
+            <div class="key-banner" id="keyBanner" hidden>
+              <span class="key-banner-icon">!</span>
+              <div><strong>尚未配置 API Key</strong><span>聊天需要 DeepSeek 与百炼嵌入 Key；配置后即可使用。</span></div>
+              <button class="soft-button" id="keyBannerAction" type="button">去配置</button>
+            </div>
+
+            <div id="messageList" class="messages" aria-live="polite" aria-label="对话消息"></div>
+
+            <div class="composer-wrap">
+              <div class="composer" id="composer">
+                <div class="composer-model-row">
+                  <label class="model-label" for="modelSelect">模型</label>
+                  <select class="model-select" id="modelSelect" aria-label="选择回答模型">
+                    <option value="deepseek-v4-flash" data-provider="deepseek">DeepSeek V4 Flash</option>
+                    <option value="gpt-4.1-mini" data-provider="openai">GPT-4.1 mini</option>
+                    <option value="claude-sonnet-4" data-provider="anthropic">Claude Sonnet 4</option>
+                  </select>
+                  <span class="model-hint" id="modelHint">当前回答使用 DeepSeek V4 Flash</span>
+                </div>
+                <textarea id="questionInput" rows="1" placeholder="问点什么…… 例如：LM358 的电源电压范围是多少？" aria-label="输入问题"></textarea>
+                <div class="composer-actions">
+                  <span class="composer-hint">Enter 发送 · Shift + Enter 换行</span>
+                  <button class="send-button" id="sendButton" type="button" aria-label="发送问题">
+                    <svg class="send-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <path d="M5 12h13M13 6l6 6-6 6" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <svg class="stop-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                      <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <p class="composer-foot">回答由本地知识库与所选模型生成，请核对引用原文。</p>
+            </div>
+          </section>
+
+          <aside id="sourcesPanel" class="sources-panel" aria-label="引用来源">
+            <div class="sources-head">
+              <div>
+                <span class="eyebrow">SOURCES</span>
+                <h3>引用来源 <span id="sourceCount">2</span></h3>
+              </div>
+              <button class="icon-button close-sources" id="closeSources" type="button" aria-label="关闭来源面板">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                </svg>
+              </button>
+            </div>
+            <div id="sourcesList" class="sources-list"></div>
+            <div class="sources-foot">点击回答中的 [n] 或来源卡片可定位原文</div>
+          </aside>
+        </div>
+        <div class="drawer-backdrop" id="drawerBackdrop" hidden></div>
+      </section>
+
+      <section id="documentsView" class="view" aria-label="文档管理">
+        <div class="documents-shell">
+          <div class="page-head">
+            <div>
+              <span class="eyebrow">KNOWLEDGE BASE</span>
+              <h2>文档管理</h2>
+              <p>上传、移出、恢复或重建本地知识库；移出后原文件仍保留，可随时恢复。</p>
+            </div>
+            <button class="primary-button" id="rebuildButton" type="button">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M4 4v5h5M20 20v-5h-5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                <path d="M5.7 9a7.5 7.5 0 0 1 12.8-2.3L20 9M18.3 15a7.5 7.5 0 0 1-12.8 2.3L4 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+              </svg>
+              重建索引
+            </button>
+          </div>
+
+          <div class="stats-grid">
+            <article class="stat-card">
+              <span class="stat-icon blue">▤</span>
+              <div><strong id="statDocs">10</strong><span>可检索文档</span></div>
+            </article>
+            <article class="stat-card">
+              <span class="stat-icon teal">◈</span>
+              <div><strong id="statChunks">4,021</strong><span>可检索文本片段</span></div>
+            </article>
+            <article class="stat-card">
+              <span class="stat-icon amber">◒</span>
+              <div><strong id="statSize">49.2 MB</strong><span>索引占用</span></div>
+            </article>
+            <article class="stat-card">
+              <span class="stat-icon rose">◷</span>
+              <div><strong id="statRebuild">6m 09s</strong><span>上次全量重建</span></div>
+            </article>
+          </div>
+
+          <div class="doc-tabs" role="tablist" aria-label="文档状态">
+            <button class="doc-tab active" type="button" data-doc-tab="active" role="tab" aria-selected="true">
+              已入库 <span id="activeDocCount">10</span>
+            </button>
+            <button class="doc-tab" type="button" data-doc-tab="removed" role="tab" aria-selected="false">
+              已移出 <span id="removedDocCount">0</span>
+            </button>
+            <span class="doc-tabs-hint">移出后在这里恢复或彻底删除；向量仍保留</span>
+          </div>
+
+          <section class="upload-panel" id="uploadPanel" aria-label="上传文档">
+            <div class="upload-copy">
+              <span class="eyebrow">IMPORT</span>
+              <h3>向知识库添加文档</h3>
+              <p>支持 PDF、Word、TXT；上传后会自动解析、分块并写入向量库。</p>
+            </div>
+            <label class="upload-zone" for="fileInput">
+              <span class="upload-icon">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M12 16V5m0 0L7.5 9.5M12 5l4.5 4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+                  <path d="M5 15v2.5A2.5 2.5 0 0 0 7.5 20h9a2.5 2.5 0 0 0 2.5-2.5V15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                </svg>
+              </span>
+              <span class="upload-text"><strong>拖拽文件到这里，或点击选择</strong><small>PDF / DOCX / TXT · 单文件建议 ≤ 20 MB</small></span>
+              <span class="upload-action">选择文件</span>
+            </label>
+            <input id="fileInput" type="file" multiple accept=".pdf,.docx,.txt" hidden>
+          </section>
+
+          <section class="docs-panel" aria-label="已入库文档">
+            <div class="docs-toolbar">
+              <div>
+                <span class="eyebrow">LIBRARY</span>
+                <h3 id="docsTitle">已入库文档</h3>
+              </div>
+              <label class="search-box">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <circle cx="11" cy="11" r="6" stroke="currentColor" stroke-width="1.8"/>
+                  <path d="M16 16l4 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                </svg>
+                <input id="docSearch" type="search" placeholder="搜索文件名…" aria-label="搜索文档">
+              </label>
+            </div>
+
+            <div class="removed-notice" id="removedNotice" hidden>
+              这些文档已移出知识库，检索不会命中；向量仍保留在本地，可随时恢复。彻底删除才会移除向量并删除原文件（<code>data/uploads</code>）。
+            </div>
+
+            <div class="table-scroll">
+              <table class="docs-table">
+                <thead>
+                  <tr>
+                    <th>文件名</th>
+                    <th>格式</th>
+                    <th class="num">页数</th>
+                    <th class="num">文本片段</th>
+                    <th>状态</th>
+                    <th class="right">操作</th>
+                  </tr>
+                </thead>
+                <tbody id="docsTableBody"></tbody>
+              </table>
+            </div>
+            <div class="docs-footer">
+              <span id="docsFooter">共 10 个文件，4,021 个文本片段</span>
+              <span class="muted">删除文档会同时移除它的全部文本片段</span>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section id="settingsView" class="view" aria-label="设置">
+        <div class="settings-shell">
+          <div class="page-head">
+            <div>
+              <span class="eyebrow">SETTINGS</span>
+              <h2>API 与设置</h2>
+              <p>配置自己的模型密钥。Key 只保存在本机，保存后只显示末 4 位。</p>
+            </div>
+          </div>
+
+          <div class="settings-security">
+            <span class="settings-security-icon">⌁</span>
+            <div>
+              <strong>密钥不会上传到我们的服务器</strong>
+              <p>本地模式使用 Windows DPAPI 加密保存；界面和日志都不会出现完整 Key。调用模型时由服务端解密使用。</p>
+            </div>
+          </div>
+
+          <div class="settings-config-grid">
+            <section class="settings-column embedding-column">
+              <div class="settings-section-head">
+                <div>
+                  <span class="eyebrow">VECTOR / EMBEDDING</span>
+                  <h3>向量模型</h3>
+                  <p>只负责上传与检索；更换嵌入模型或维度可能触发索引重建。</p>
+                </div>
+              </div>
+
+              <article class="key-card embedding-card" id="dashscopeCard">
+                <div class="key-card-head">
+                  <div class="key-provider">
+                    <span class="key-provider-mark ds2">Q</span>
+                    <div><h3>阿里云百炼</h3><p>向量嵌入 · text-embedding-v4</p></div>
+                  </div>
+                  <span class="key-status unconfigured" id="dashscopeStatus">未配置</span>
+                </div>
+                <div class="key-mask" id="dashscopeMask">未配置</div>
+                <div class="key-meta" id="dashscopeMeta">上传与检索需要这个 Key</div>
+                <div class="key-actions">
+                  <button class="key-action primary" id="dashscopeEdit" type="button">配置 Key</button>
+                  <button class="key-action" id="dashscopeTest" type="button" disabled>测试连接</button>
+                  <button class="key-action danger" id="dashscopeClear" type="button" disabled>清除</button>
+                </div>
+              </article>
+
+              <p class="embedding-note">
+                切换嵌入模型会改变向量维度，已有索引必须整库重建；普通问答请只切换右侧模型。
+              </p>
+            </section>
+
+            <section class="settings-column generation-column">
+              <div class="settings-section-head">
+                <div>
+                  <span class="eyebrow">GENERATION</span>
+                  <h3>问答模型</h3>
+                  <p>用于生成回答；切换只影响后续问答，不会改变索引。</p>
+                </div>
+                <button class="add-provider" id="addProviderButton" type="button">＋ 添加 Provider</button>
+              </div>
+
+              <div class="provider-list">
+                <article class="key-card" id="deepseekCard">
+                  <div class="key-card-head">
+                    <div class="key-provider">
+                      <span class="key-provider-mark ds">D</span>
+                      <div><h3>DeepSeek</h3><p>答案生成 · deepseek-v4-flash</p></div>
+                    </div>
+                    <div class="key-status-group">
+                      <span class="key-default-badge">默认</span>
+                      <span class="key-status unconfigured" id="deepseekStatus">未配置</span>
+                    </div>
+                  </div>
+                  <div class="key-mask" id="deepseekMask">未配置</div>
+                  <div class="key-meta" id="deepseekMeta">配置后才能生成回答</div>
+                  <div class="key-actions">
+                    <button class="key-action primary" id="deepseekEdit" type="button">配置 Key</button>
+                    <button class="key-action" id="deepseekTest" type="button" disabled>测试连接</button>
+                    <button class="key-action danger" id="deepseekClear" type="button" disabled>清除</button>
+                  </div>
+                </article>
+
+                <article class="key-card" id="openaiCard">
+                  <div class="key-card-head">
+                    <div class="key-provider">
+                      <span class="key-provider-mark openai">O</span>
+                      <div><h3>OpenAI</h3><p>答案生成 · gpt-4.1-mini</p></div>
+                    </div>
+                    <span class="key-status unconfigured" id="openaiStatus">未配置</span>
+                  </div>
+                  <div class="key-mask" id="openaiMask">未配置</div>
+                  <div class="key-meta" id="openaiMeta">配置后才能使用这个模型</div>
+                  <div class="key-actions">
+                    <button class="key-action primary" id="openaiEdit" type="button">配置 Key</button>
+                    <button class="key-action" id="openaiTest" type="button" disabled>测试连接</button>
+                    <button class="key-action danger" id="openaiClear" type="button" disabled>清除</button>
+                  </div>
+                </article>
+
+                <article class="key-card" id="anthropicCard">
+                  <div class="key-card-head">
+                    <div class="key-provider">
+                      <span class="key-provider-mark anthropic">C</span>
+                      <div><h3>Anthropic</h3><p>答案生成 · claude-sonnet-4</p></div>
+                    </div>
+                    <span class="key-status unconfigured" id="anthropicStatus">未配置</span>
+                  </div>
+                  <div class="key-mask" id="anthropicMask">未配置</div>
+                  <div class="key-meta" id="anthropicMeta">配置后才能使用这个模型</div>
+                  <div class="key-actions">
+                    <button class="key-action primary" id="anthropicEdit" type="button">配置 Key</button>
+                    <button class="key-action" id="anthropicTest" type="button" disabled>测试连接</button>
+                    <button class="key-action danger" id="anthropicClear" type="button" disabled>清除</button>
+                  </div>
+                </article>
+              </div>
+            </section>
+          </div>
+
+          <div class="settings-footer">
+            <span>首次启动会自动进入引导；也可以重新运行。</span>
+            <button class="soft-button" id="restartSetup" type="button">重新运行首次引导</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="setupView" class="view" aria-label="首次配置">
+        <div class="setup-shell">
+          <div class="setup-card" id="setupCard"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div class="modal-backdrop" id="modalBackdrop" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-head">
+        <h3 id="modalTitle"></h3>
+        <button class="icon-button" id="modalClose" type="button" aria-label="关闭">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M6 6l12 12M18 6L6 18" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-footer" id="modalFooter"></div>
     </div>
-    <footer>version {{ version }} · 仅监听 127.0.0.1</footer>
-  </main>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="/static/i18n.js"></script>
+  <script src="/static/app.js"></script>
 </body>
 </html>

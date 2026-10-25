@@ -21,8 +21,10 @@ def test_health() -> None:
 def test_index_page() -> None:
     response = client.get("/")
     assert response.status_code == 200
-    assert "API 已启动" in response.text
-    assert "/docs" in response.text
+    assert "RAG 知识库" in response.text
+    assert "/static/styles.css" in response.text
+    assert "/static/app.js" in response.text
+    assert "/static/assets/logo-mark.svg" in response.text
 
 
 def test_swagger_available() -> None:

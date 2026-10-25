@@ -6,7 +6,7 @@
 
 **定位**：单用户、本地运行、不对外发布。
 
-**当前状态**：M1（文档索引）和 M2（检索生成）已完成，M3 Web API 已完成到聊天 SSE；浏览器页面仍在 `prototype/ui` 评审，尚未接入 `templates`。因此现在可以通过 CLI 和 `/docs` 使用完整问答链路，首页还不是最终产品页面。
+**当前状态**：M1（文档索引）和 M2（检索生成）已完成，M3 Web API 已完成到聊天 SSE；UI 壳已从 `prototype/ui` 迁入 `templates/` + `app/static/`，但聊天页仍使用 mock 数据，T-5.5 还需要接 `/chat` SSE。因此现在可以通过 CLI 和 `/docs` 使用完整问答链路，网页端处于“界面已定稿、数据待接通”的状态。
 
 ---
 
@@ -33,7 +33,7 @@
 | 兜底防幻觉 | ✅ 已实现 | 无有效引用时返回“知识库中没有相关信息。” |
 | 文档管理 API | ✅ 已实现 | 列表 / 上传 job / 软删除 / 恢复 / 彻底删除 / 重建 |
 | Web API | ✅ 已实现 | FastAPI + SSE；`/docs` 可调通已实现接口 |
-| Web 页面 | ⏳ 待接入 | `prototype/ui` 已评审，T-5.5/5.6 接入 `templates` |
+| Web 页面 | 🟡 进行中 | UI 壳已迁入 `templates/`；聊天仍为 mock，T-5.5 待接 SSE |
 | 多轮对话 | ⏳ 未开始 | Sprint 4（T-6） |
 | 一键启动脚本 | ⏳ 未实现 | Sprint 4（T-7.2） |
 
@@ -62,13 +62,13 @@ RAG_konwledge_base_system/
 │   ├── context.py           #   RequestContext / SecretProvider 边界
 │   ├── config.py            #   pydantic-settings
 │   └── main.py              #   FastAPI 入口（127.0.0.1:8000）
-├── templates/               # Jinja2 页面（当前为 API 占位页）
+├── templates/               # Jinja2 页面（index.html 已接入定稿 UI）
 ├── data/                    # 运行期数据（内容不进版本库）
 │   ├── uploads/             #   原始文档
 │   └── chroma/              #   向量库持久化
 ├── docs/                    # 项目文档
 ├── logs/                    # 日志输出
-├── prototype/ui/            # UI 评审原型（尚未接入 templates）
+├── prototype/ui/            # UI 设计留档（不再作为运行页面）
 ├── scripts/                 # 建库 / 管理 / 问答 / 评估 / 自检脚本
 ├── tests/                   # 测试
 ├── .env.example             # 非敏感配置模板
@@ -121,7 +121,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 启动后：
 
-- 首页：<http://127.0.0.1:8000/>（当前为 API 占位页）
+- 首页：<http://127.0.0.1:8000/>（定稿 UI 壳；聊天暂为 mock，待接 SSE）
 - Swagger：<http://127.0.0.1:8000/docs>
 - 健康检查：<http://127.0.0.1:8000/api/v1/health>
 
@@ -161,14 +161,19 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 .venv\Scripts\python.exe scripts\check_models.py
 ```
 
-**UI 原型：**
+**Web UI 与设计留档：**
 
 ```powershell
+# 正式页面：由 FastAPI 提供 templates + app/static
+python -m app.main
+# http://127.0.0.1:8000/
+
+# 设计留档：旧 prototype，不连接真实 API
 python -m http.server 8765 --bind 127.0.0.1 --directory prototype/ui
 # http://127.0.0.1:8765/
 ```
 
-原型是评审版，不连接真实 API；页面接入见任务清单 T-5.5/5.6。
+正式页面的 UI 壳已迁入 `templates/` 和 `app/static/`，但聊天数据仍是 mock；T-5.5 接 `/chat` SSE 后才会使用真实回答。`prototype/ui` 仅保留用于对照设计，不再作为运行页面。
 
 ---
 

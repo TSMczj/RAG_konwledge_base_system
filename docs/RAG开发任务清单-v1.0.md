@@ -273,6 +273,7 @@
   - 交付：`templates/index.html` —— 输入框、流式回答区、清空会话
   - 依赖：T-5.1
   - 验收：页面可提交问题并显示流式回答
+  - 状态：定稿 UI 已迁入 `templates/index.html` + `app/static/`；目前仍是 mock，待接 `/chat` SSE 后勾选
 
 - [ ] **T-5.6 来源展示组件** `M` （FR-09）
   - 交付：引用列表（`[n] 文件名 · 第 x 页`）+ 点击展开原文
