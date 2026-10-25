@@ -58,6 +58,10 @@ htmlcov/
 .tox/
 .cache/
 
+# ---------- 设计留档 ----------
+# 评审版原型只在本机保留，不进入正式仓库；定稿 UI 在 templates/ + app/static/
+prototype/
+
 # ---------- IDE / 编辑器 ----------
 .vscode/
 .idea/
