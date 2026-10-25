@@ -17,7 +17,9 @@ from pydantic import BaseModel, Field
 from app.config import ConfigError, get_settings
 from app.core.prompt import build_prompt
 from app.core.qa import NO_ANSWER, QAService, parse_citations
+from app.core.rewriter import QueryRewriter
 from app.logging_config import logger
+from app.services.sessions import session_store
 
 router = APIRouter(tags=["chat"])
 
@@ -41,31 +43,56 @@ def _sse(event: str, payload: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 
+def _history_messages(history) -> list[dict[str, str]]:
+    messages: list[dict[str, str]] = []
+    for turn in history:
+        messages.append({"role": "user", "content": turn.question})
+        messages.append({"role": "assistant", "content": turn.answer})
+    return messages
+
+
 def _events(service: QAService, request: ChatRequest):
     started = perf_counter()
     session_id = request.session_id or f"sess_{uuid4().hex[:16]}"
     retrieval_ms = 0.0
     ttft_ms = 0.0
     usage: dict | None = None
+    rewritten_query = request.question
 
     try:
-        retrieval = service.retriever.retrieve(request.question)
+        history = session_store.history(session_id)
+        max_turns = getattr(service.settings, "max_history_turns", 5)
+        rewritten_query = QueryRewriter(
+            service.llm,
+            max_history_turns=max_turns,
+        ).rewrite(request.question, history)
+
+        retrieval = service.retriever.retrieve(rewritten_query)
         retrieval_ms = retrieval.elapsed_ms
         prompt = build_prompt(
-            request.question,
+            rewritten_query,
             retrieval.items,
             max_context_tokens=service.settings.max_context_tokens,
+            history=_history_messages(history),
         )
         sources = [item.to_source(n) for n, item in enumerate(prompt.used_sources, start=1)]
         yield _sse("sources", {"sources": sources})
 
         if not prompt.used_sources:
+            session_store.append(
+                session_id,
+                question=request.question,
+                answer=NO_ANSWER,
+                rewritten_query=rewritten_query,
+                max_turns=max_turns,
+            )
             yield _sse("delta", {"text": NO_ANSWER})
             yield _sse(
                 "done",
                 {
                     "session_id": session_id,
                     "answer": NO_ANSWER,
+                    "rewritten_query": rewritten_query,
                     "usage": None,
                     "fallback": True,
                     "timings": {
@@ -98,11 +125,19 @@ def _events(service: QAService, request: ChatRequest):
         fallback = not bool(citations)
         if fallback:
             answer = NO_ANSWER
+        session_store.append(
+            session_id,
+            question=request.question,
+            answer=answer,
+            rewritten_query=rewritten_query,
+            max_turns=max_turns,
+        )
         yield _sse(
             "done",
             {
                 "session_id": session_id,
                 "answer": answer,
+                "rewritten_query": rewritten_query,
                 "usage": usage,
                 "fallback": fallback,
                 "timings": {

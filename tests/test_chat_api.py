@@ -10,6 +10,7 @@ from app.core.llm import LLMDelta
 from app.core.qa import NO_ANSWER
 from app.core.retriever import RetrievalResult, RetrievedChunk
 from app.main import app
+from app.services.sessions import session_store
 from fastapi.testclient import TestClient
 
 client = TestClient(app)
@@ -97,6 +98,54 @@ def test_chat_streams_sources_delta_done(monkeypatch) -> None:
     assert "".join(payload["text"] for name, payload in events if name == "delta") == "答案[1]"
     assert events[-1][1]["answer"] == "答案[1]"
     assert service.closed is True
+
+
+def test_chat_multi_turn_rewrites_follow_up(monkeypatch) -> None:
+    session_store.clear("sess_multi_turn_test")
+
+    class RecordingRetriever(FakeRetriever):
+        def __init__(self, result):
+            super().__init__(result)
+            self.queries = []
+
+        def retrieve(self, question, *, k=None):
+            self.queries.append(question)
+            return self.result
+
+    class MultiTurnLLM:
+        def __init__(self):
+            self.calls = []
+
+        def stream_chat(self, messages, *, temperature=None, max_tokens=None):
+            self.calls.append(messages)
+            if "检索查询改写器" in messages[0]["content"]:
+                yield LLMDelta(text="BERT 的消融实验")
+            else:
+                yield LLMDelta(text="消融实验验证了预训练任务的重要性。[1]")
+
+    llm = MultiTurnLLM()
+    retriever = RecordingRetriever(_retrieval(_source()))
+    service = FakeService(retriever, llm)
+    _patch(monkeypatch, service)
+
+    first = client.post(
+        "/api/v1/chat",
+        json={"question": "BERT 的预训练任务是什么？", "session_id": "sess_multi_turn_test"},
+    )
+    second = client.post(
+        "/api/v1/chat",
+        json={"question": "那它的消融实验呢？", "session_id": "sess_multi_turn_test"},
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    second_events = _events(second.text)
+    assert second_events[-1][1]["session_id"] == "sess_multi_turn_test"
+    assert second_events[-1][1]["rewritten_query"] == "BERT 的消融实验"
+    assert retriever.queries[0] == "BERT 的预训练任务是什么？"
+    assert retriever.queries[1] == "BERT 的消融实验"
+    assert len(session_store.history("sess_multi_turn_test")) == 2
+    session_store.clear("sess_multi_turn_test")
 
 
 def test_chat_no_context_returns_fixed_answer_without_llm(monkeypatch) -> None:

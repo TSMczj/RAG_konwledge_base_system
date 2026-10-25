@@ -127,7 +127,8 @@
 约束：
 
 - `question` 非空，长度上限由配置控制（建议 4000 字）；
-- `session_id` 只用于多轮上下文；V1 可内存保存，重启即清；
+- `session_id` 只用于多轮上下文；V1 内存保存最近 `MAX_HISTORY_TURNS` 轮，重启即清；
+- 有历史且当前问题为追问时，服务端先做查询改写，再检索；改写失败回退原问题；
 - 服务器不得把 `tenant_id`/Key 写进 SSE。
 
 响应头：
@@ -197,6 +198,7 @@ event: done
 data: {
   "session_id": "01J...",
   "answer": "完整回答文本",
+  "rewritten_query": "多轮追问改写后的独立查询；首轮等于 question",
   "usage": {"prompt_tokens": 1200, "completion_tokens": 180},
   "timings": {"retrieval_ms": 220, "ttft_ms": 410, "total_ms": 2600}
 }

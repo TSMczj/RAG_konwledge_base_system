@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 from time import perf_counter
+from typing import Sequence
 
 from app.config import Settings, get_settings
 from app.core.llm import DeepSeekLLM, LLMResult
@@ -129,7 +130,13 @@ class QAService:
         if close is not None:
             close()
 
-    def answer(self, question: str, *, k: int | None = None) -> QAResult:
+    def answer(
+        self,
+        question: str,
+        *,
+        k: int | None = None,
+        history: Sequence[dict[str, str]] = (),
+    ) -> QAResult:
         """完成一次问答。
 
         Args:
@@ -150,6 +157,7 @@ class QAService:
             query,
             retrieval.items,
             max_context_tokens=self._settings.max_context_tokens,
+            history=history,
         )
 
         if not prompt.used_sources:

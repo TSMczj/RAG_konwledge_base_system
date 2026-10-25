@@ -38,6 +38,7 @@ const state = {
   model: localStorage.getItem("rag-ui-model") || "deepseek-v4-flash",
   streaming: false,
   abortController: null,
+  sessionId: null,
   conversation: [],
   sources: [],
   sourcesNote: "回答后在这里查看引用来源。",
@@ -838,6 +839,7 @@ function handleChatEvent(event, payload, assistant) {
   }
 
   if (event === "done") {
+    if (payload.session_id) state.sessionId = payload.session_id;
     if (typeof payload.answer === "string") assistant.text = payload.answer;
     assistant.citations = parseAnswerCitations(assistant.text, assistant.sources);
     assistant.insufficient = Boolean(payload.fallback) || assistant.sources.length === 0;
@@ -860,7 +862,10 @@ async function streamChatFromApi(question, assistant) {
     const response = await fetch("/api/v1/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({
+        question,
+        ...(state.sessionId ? { session_id: state.sessionId } : {}),
+      }),
       signal: controller.signal,
     });
 
@@ -968,6 +973,7 @@ function clearChat() {
   state.abortController = null;
   state.streaming = false;
   state.streamAssistant = null;
+  state.sessionId = null;
   state.conversation = [];
   state.sources = [];
   state.sourcesNote = "回答后在这里查看引用来源。";

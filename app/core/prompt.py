@@ -115,18 +115,44 @@ def build_context(
     return "\n\n".join(blocks), tuple(used), tuple(dropped), used_tokens
 
 
+def _fit_history(
+    history: Sequence[dict[str, str]],
+    *,
+    max_tokens: int,
+) -> tuple[dict[str, str], ...]:
+    """从最近的历史往前装填，避免历史挤占检索上下文预算。"""
+    if not history or max_tokens <= 0:
+        return ()
+    selected: list[dict[str, str]] = []
+    used = 0
+    for message in reversed(history):
+        role = str(message.get("role", ""))
+        content = str(message.get("content", "")).strip()
+        if role not in {"user", "assistant"} or not content:
+            continue
+        cost = estimate_tokens(content) + 8
+        if used + cost > max_tokens:
+            break
+        selected.append({"role": role, "content": content})
+        used += cost
+    selected.reverse()
+    return tuple(selected)
+
+
 def build_prompt(
     question: str,
     sources: Sequence[RetrievedChunk],
     *,
     max_context_tokens: int,
+    history: Sequence[dict[str, str]] = (),
 ) -> PromptBundle:
-    """构造 System + User 消息。
+    """构造 System + 历史 + User 消息。
 
     Args:
         question: 用户问题，不能为空。
         sources: 检索结果。
         max_context_tokens: 上下文预算。
+        history: 可选的 OpenAI 格式历史消息；按 token 预算丢弃最旧消息。
 
     Returns:
         ``PromptBundle``；``used_sources`` 的编号与上下文 [n] 一致。
@@ -145,9 +171,12 @@ def build_prompt(
     )
     system = SYSTEM_PROMPT.format(context=context)
     user = USER_TEMPLATE.format(question=query)
+    history_budget = min(1200, max(0, max_context_tokens // 3))
+    fitted_history = _fit_history(history, max_tokens=history_budget)
     return PromptBundle(
         messages=(
             {"role": "system", "content": system},
+            *fitted_history,
             {"role": "user", "content": user},
         ),
         used_sources=used,

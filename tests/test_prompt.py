@@ -92,6 +92,28 @@ def test_context_numbering_is_continuous_after_drop() -> None:
         assert f"[{index}]" in bundle.context
 
 
+def test_history_messages_precede_current_question() -> None:
+    bundle = build_prompt(
+        "那它的消融实验呢？",
+        [_source("bert.pdf", "BERT 通过消融实验验证预训练任务。", page=2)],
+        max_context_tokens=6000,
+        history=[
+            {"role": "user", "content": "BERT 的预训练任务是什么？"},
+            {"role": "assistant", "content": "MLM 和 NSP。[1]"},
+        ],
+    )
+
+    assert [message["role"] for message in bundle.messages] == [
+        "system",
+        "user",
+        "assistant",
+        "user",
+    ]
+    assert "BERT 的预训练任务" in bundle.messages[1]["content"]
+    assert "MLM 和 NSP" in bundle.messages[2]["content"]
+    assert "消融实验" in bundle.messages[3]["content"]
+
+
 def test_estimate_tokens_is_conservative() -> None:
     assert estimate_tokens("中文") == 2
     assert estimate_tokens("abcdefgh") == 2
