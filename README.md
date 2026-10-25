@@ -6,7 +6,7 @@
 
 **定位**：单用户、本地运行、不对外发布。
 
-**当前状态**：M1（文档索引）、M2（检索生成）、M3（Web 化）已完成；聊天页、文档页、设置页均已接真实 API，真实 Key 浏览器闭环通过。下一阶段是 M4：多轮对话、启动脚本与最终验收。
+**当前状态**：V1 已完成。M1 文档索引、M2 检索生成、M3 Web 化、M4 多轮与交付均通过；聊天页、文档页、设置页已接真实 API，真实 Key 浏览器闭环通过。
 
 ---
 
@@ -34,8 +34,8 @@
 | 文档管理 API | ✅ 已实现 | 列表 / 上传 job / 软删除 / 恢复 / 彻底删除 / 重建 |
 | Web API | ✅ 已实现 | FastAPI + SSE；`/docs` 可调通已实现接口 |
 | Web 页面 | ✅ 已实现 | 聊天 / 文档 / 设置三页接真实 API；M3 验收通过 |
-| 多轮对话 | ⏳ 未开始 | Sprint 4（T-6） |
-| 一键启动脚本 | ⏳ 未实现 | Sprint 4（T-7.2） |
+| 多轮对话 | ✅ 已实现 | `session_id` + 最近 5 轮内存历史 + 追问查询改写 |
+| 一键启动脚本 | ✅ 已实现 | `start.cmd` / `start.ps1` / `start.sh` |
 
 ## 技术栈
 
@@ -55,14 +55,17 @@
 ```
 RAG_konwledge_base_system/
 ├── app/                     # 应用主体
-│   ├── api/                 #   chat / documents / health / index 路由
-│   ├── core/                #   loader / splitter / embedder / vectorstore / retriever / prompt / llm / qa
-│   ├── services/            #   文档管理与后台上传/重建任务
-│   ├── static/              #   css / js
+│   ├── api/                 #   chat / documents / health / index / settings 路由
+│   ├── core/                #   loader / splitter / embedder / retriever / prompt / llm / qa / rewriter
+│   ├── services/            #   文档任务 / job / 多轮会话
+│   ├── static/              #   css / js / 静态资源
 │   ├── context.py           #   RequestContext / SecretProvider 边界
+│   ├── local_secrets.py     #   Windows DPAPI 本机 Key 存储
 │   ├── config.py            #   pydantic-settings
 │   └── main.py              #   FastAPI 入口（127.0.0.1:8000）
 ├── templates/               # Jinja2 页面（index.html 已接入定稿 UI）
+├── start.cmd / start.ps1    # Windows 一键启动
+├── start.sh                 # Git Bash / Linux / macOS 一键启动
 ├── data/                    # 运行期数据（内容不进版本库）
 │   ├── uploads/             #   原始文档
 │   └── chroma/              #   向量库持久化
@@ -112,6 +115,19 @@ Copy-Item .env.example .env
 `.env` 只放非敏感参数；两个 API Key 可走系统环境变量，也可在首次引导/设置页保存到本机 DPAPI 加密存储。
 
 ### 4. 启动 API
+
+**一键启动：**
+
+```powershell
+# Windows：双击 start.cmd，或在 PowerShell 执行
+.\start.cmd
+# 若本机允许脚本，也可直接 .\start.ps1
+
+# Git Bash / Linux / macOS
+./start.sh
+```
+
+**手动启动：**
 
 ```powershell
 # 只监听 127.0.0.1:8000
@@ -176,6 +192,8 @@ python -m http.server 8765 --bind 127.0.0.1 --directory prototype/ui
 ```
 
 正式页面的聊天页、文档页和设置页已接真实 API；真实问答与上传需要系统环境变量，或在首次引导/设置页保存本机 DPAPI Key。`prototype/ui` 仅保留用于对照设计，不再作为运行页面。
+
+**多轮对话：** 聊天页会自动把 `session_id` 带到下一轮；服务端在内存保留最近 `MAX_HISTORY_TURNS` 轮（默认 5）。追问如“那它的消融实验呢？”会先被改写为独立查询（例如“BERT 的消融实验是什么？”）再检索；清空会话会同时清掉前端 session_id。
 
 ---
 
@@ -292,8 +310,8 @@ chore(T-0.2): 锁定依赖版本
 | Sprint 0 | 项目初始化 | 已完成（T-0.1 ~ T-0.6） |
 | Sprint 1 | 文档摄入与索引（M1） | 已完成（T-1.1 ~ T-1.7、T-2.1 ~ T-2.3、T-3.1 ~ T-3.6；M1 出口验收通过） |
 | Sprint 2 | 检索与生成（M2） | 已完成（T-4.1 ~ T-4.8；M2 出口验收通过） |
-| Sprint 3 | Web 化（M3） | 进行中（T-5.1 ~ T-5.4 已完成） |
-| Sprint 4 | 多轮与交付（M4） | 未开始 |
+| Sprint 3 | Web 化（M3） | 已完成（T-5.1 ~ T-5.9；M3 出口验收通过） |
+| Sprint 4 | 多轮与交付（M4） | 已完成（T-6.1 ~ T-6.4、T-7.1 ~ T-7.4；A1–A10 通过） |
 
 详细任务见 [`docs/RAG开发任务清单-v1.0.md`](docs/RAG开发任务清单-v1.0.md)。
 
