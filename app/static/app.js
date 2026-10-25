@@ -47,30 +47,10 @@ const state = {
   docsError: "",
   docTab: "active",
   keys: {
-    deepseek: {
-      configured: true,
-      masked: "sk-••••••••••••••••••4f2a",
-      source: "本机保存",
-      updatedAt: "2026-10-25 01:20",
-    },
-    dashscope: {
-      configured: true,
-      masked: "sk-••••••••••••••••••7b3c",
-      source: "本机保存",
-      updatedAt: "2026-10-25 01:20",
-    },
-    openai: {
-      configured: true,
-      masked: "sk-••••••••••••••••••9c1d",
-      source: "演示配置",
-      updatedAt: "2026-10-25 14:58",
-    },
-    anthropic: {
-      configured: true,
-      masked: "sk-••••••••••••••••••3a7e",
-      source: "演示配置",
-      updatedAt: "2026-10-25 14:58",
-    },
+    deepseek: { configured: false, masked: "未配置", source: "", updatedAt: "" },
+    dashscope: { configured: false, masked: "未配置", source: "", updatedAt: "" },
+    openai: { configured: false, masked: "未配置", source: "", updatedAt: "" },
+    anthropic: { configured: false, masked: "未配置", source: "", updatedAt: "" },
   },
   setupStep: 1,
   setupTested: false,
@@ -159,6 +139,66 @@ function providerLabel(provider) {
   return labels[provider] || provider;
 }
 
+function secretSourceLabel(source) {
+  return { local: "本机保存", env: "系统环境变量", none: "未配置" }[source] || "未配置";
+}
+
+function secretStateFromApi(payload) {
+  return {
+    configured: Boolean(payload.configured),
+    masked: payload.masked || "未配置",
+    source: secretSourceLabel(payload.source),
+    updatedAt: payload.updated_at ? formatApiDate(payload.updated_at) : "",
+  };
+}
+
+async function loadSecrets() {
+  try {
+    const data = await apiJson("/settings/secrets");
+    Object.entries(data.providers || {}).forEach(([provider, payload]) => {
+      state.keys[provider] = secretStateFromApi(payload);
+    });
+    state.secretsComplete = Boolean(data.complete);
+  } catch (error) {
+    state.secretsError = error.message;
+  }
+  renderSettings();
+  refreshKeyStateUI();
+  updateModelSelect();
+}
+
+async function saveSecret(provider, key) {
+  const payload = await apiJson(`/settings/secrets/${provider}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key }),
+  });
+  state.keys[provider] = secretStateFromApi(payload);
+  renderSettings();
+  refreshKeyStateUI();
+  updateModelSelect();
+  if (bothKeysConfigured()) loadDocuments();
+  return payload;
+}
+
+async function testSecret(provider) {
+  return apiJson(`/settings/secrets/${provider}/test`, { method: "POST" });
+}
+
+async function clearSecret(provider) {
+  const payload = await apiJson(`/settings/secrets/${provider}`, { method: "DELETE" });
+  state.keys[provider] = {
+    configured: Boolean(payload.configured),
+    masked: "未配置",
+    source: "",
+    updatedAt: "",
+  };
+  renderSettings();
+  refreshKeyStateUI();
+  updateModelSelect();
+  return payload;
+}
+
 function modelDef(id) {
   return MODELS[id] || MODELS["deepseek-v4-flash"];
 }
@@ -219,11 +259,22 @@ function renderSettings() {
     const clear = $(`#${provider}Clear`);
     if (!status) return;
 
+    if (!["deepseek", "dashscope"].includes(provider)) {
+      status.textContent = "未接入";
+      status.className = "key-status unconfigured";
+      mask.textContent = "—";
+      meta.textContent = "多模型适配中，暂未接入";
+      edit.disabled = true;
+      test.disabled = true;
+      clear.disabled = true;
+      return;
+    }
+
     status.textContent = config.configured ? "已配置" : "未配置";
     status.className = `key-status ${config.configured ? "configured" : "unconfigured"}`;
     mask.textContent = config.configured ? config.masked : "未配置";
     meta.textContent = config.configured
-      ? `${config.source} · 更新于 ${config.updatedAt}`
+      ? [config.source, config.updatedAt ? `更新于 ${config.updatedAt}` : ""].filter(Boolean).join(" · ")
       : (provider === "dashscope" ? "上传与检索需要这个 Key" : "配置后才能使用这个模型");
     edit.textContent = config.configured ? "更换 Key" : "配置 Key";
     test.disabled = !config.configured;
@@ -241,38 +292,52 @@ function openKeyEditor(provider) {
       <input class="key-editor-input" id="keyEditorInput" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴新的 Key">
       <p class="modal-warning">保存后只显示末 4 位，例如 <code>sk-••••••••••••••••••4f2a</code>；不会显示完整内容，也不会写进日志。</p>`,
     confirmText: "保存",
-    onConfirm: () => {
+    onConfirm: async () => {
       const input = $("#keyEditorInput");
       const value = input ? input.value.trim() : "";
       if (!value) {
         showToast("请输入 API Key", "error");
         return;
       }
-      state.keys[provider] = {
-        configured: true,
-        masked: maskKey(value),
-        source: "本机保存",
-        updatedAt: nowLabel(),
-      };
-      renderSettings();
-      refreshKeyStateUI();
-      closeModal();
-      showToast(`${label} Key 已保存`);
+      const button = $("#modalConfirm");
+      if (button) {
+        button.disabled = true;
+        button.textContent = "保存中…";
+      }
+      try {
+        await saveSecret(provider, value);
+        closeModal();
+        showToast(`${label} Key 已保存`);
+      } catch (error) {
+        showToast(`保存失败：${error.message}`, "error");
+        if (button) {
+          button.disabled = false;
+          button.textContent = "保存";
+        }
+      }
     },
   });
 }
 
-function testKey(provider) {
+async function testKey(provider) {
   if (!state.keys[provider].configured) return;
   const button = $(`#${provider}Test`);
   if (!button) return;
   button.disabled = true;
   button.textContent = "测试中…";
-  window.setTimeout(() => {
+  try {
+    const result = await testSecret(provider);
+    if (result.ok) {
+      showToast(`${providerLabel(provider)} 连接正常${result.latency_ms ? `（${result.latency_ms}ms）` : ""}`);
+    } else {
+      showToast(`${providerLabel(provider)} 连接失败：${result.message || "未知错误"}`, "error");
+    }
+  } catch (error) {
+    showToast(`${providerLabel(provider)} 测试失败：${error.message}`, "error");
+  } finally {
     button.disabled = false;
     button.textContent = "测试连接";
-    showToast(`${providerLabel(provider)} 连接正常`);
-  }, 720);
+  }
 }
 
 function clearKey(provider) {
@@ -280,20 +345,17 @@ function clearKey(provider) {
   openModal({
     title: `清除 ${label} Key？`,
     body: `<p>清除后，依赖这个 Key 的功能会立即停止工作；可以随时重新配置。</p>
-           <p class="modal-warning">原型中只会清除当前页面的模拟状态，不会操作真实密钥。</p>`,
+           <p class="modal-warning">Key 从本机加密存储中删除，不会影响其他 provider。</p>`,
     confirmText: "清除",
     danger: true,
-    onConfirm: () => {
-      state.keys[provider] = {
-        configured: false,
-        masked: "",
-        source: "",
-        updatedAt: "",
-      };
-      renderSettings();
-      refreshKeyStateUI();
-      closeModal();
-      showToast(`${label} Key 已清除`);
+    onConfirm: async () => {
+      try {
+        await clearSecret(provider);
+        closeModal();
+        showToast(`${label} Key 已清除`);
+      } catch (error) {
+        showToast(`清除失败：${error.message}`, "error");
+      }
     },
   });
 }
@@ -301,13 +363,11 @@ function clearKey(provider) {
 function restartSetup() {
   openModal({
     title: "重新运行首次引导？",
-    body: `<p>会清除当前模拟的 API Key 配置，并回到首次启动引导。</p>
-           <p class="modal-warning">真实版本中，这不会删除你的真实 Key，除非你选择清除。</p>`,
+    body: `<p>会回到首次启动引导，方便重新检查两个 Key 的配置。</p>
+           <p class="modal-warning">不会删除已保存的 Key；如需清除，请在 Key 卡片上单独操作。</p>`,
     confirmText: "重新引导",
-    danger: true,
+    danger: false,
     onConfirm: () => {
-      state.keys.deepseek = { configured: false, masked: "", source: "", updatedAt: "" };
-      state.keys.dashscope = { configured: false, masked: "", source: "", updatedAt: "" };
       state.setupStep = 1;
       state.setupTested = false;
       renderSettings();
@@ -403,9 +463,10 @@ function renderSetup() {
       state.setupStep -= 1;
       renderSetup();
     });
-    $("#setupNext").addEventListener("click", () => {
+    $("#setupNext").addEventListener("click", async () => {
       const input = $("#setupKeyInput");
       const value = input ? input.value.trim() : "";
+      const button = $("#setupNext");
       if (!value && !state.keys[provider].configured) {
         const error = $("#setupError");
         if (error) {
@@ -415,12 +476,24 @@ function renderSetup() {
         return;
       }
       if (value) {
-        state.keys[provider] = {
-          configured: true,
-          masked: maskKey(value),
-          source: "本机保存",
-          updatedAt: nowLabel(),
-        };
+        if (button) {
+          button.disabled = true;
+          button.textContent = "保存中…";
+        }
+        try {
+          await saveSecret(provider, value);
+        } catch (error) {
+          const box = $("#setupError");
+          if (box) {
+            box.textContent = `保存失败：${error.message}`;
+            box.hidden = false;
+          }
+          if (button) {
+            button.disabled = false;
+            button.textContent = "保存并继续";
+          }
+          return;
+        }
       }
       state.setupStep += 1;
       renderSetup();
@@ -449,22 +522,37 @@ function renderSetup() {
     state.setupStep = 3;
     renderSetup();
   });
-  $("#setupTest").addEventListener("click", () => {
+  $("#setupTest").addEventListener("click", async () => {
     const button = $("#setupTest");
     if (!button) return;
     button.disabled = true;
     button.textContent = "测试中…";
-    window.setTimeout(() => {
-      state.setupTested = true;
-      renderSetup();
-      showToast("两个 Key 连接正常");
-    }, 720);
+    try {
+      const results = await Promise.all([
+        testSecret("deepseek"),
+        testSecret("dashscope"),
+      ]);
+      const failed = results.filter((result) => !result.ok);
+      if (!failed.length) {
+        state.setupTested = true;
+        renderSetup();
+        showToast("两个 Key 连接正常");
+      } else {
+        renderSetup();
+        showToast(`连接测试失败：${failed[0].message || "未知错误"}`, "error");
+      }
+    } catch (error) {
+      button.disabled = false;
+      button.textContent = "测试连接";
+      showToast(`连接测试失败：${error.message}`, "error");
+    }
   });
-  $("#setupFinish").addEventListener("click", () => {
+  $("#setupFinish").addEventListener("click", async () => {
     if (!bothKeysConfigured()) {
       showToast("还有 Key 未配置，可先跳过", "error");
       return;
     }
+    await loadDocuments();
     refreshKeyStateUI();
     switchView("chat");
     showToast("配置完成，开始提问吧");
@@ -1577,11 +1665,15 @@ updateStats();
 updateComposerState();
 autoResizeTextarea();
 refreshKeyStateUI();
-loadDocuments();
+async function boot() {
+  await loadSecrets();
+  await loadDocuments();
+  const initialView = new URLSearchParams(window.location.search).get("view");
+  if (initialView === "documents") switchView("documents");
+  else if (initialView === "settings") switchView("settings");
+  else if (initialView === "setup") switchView("setup");
+  else if (!bothKeysConfigured()) switchView("setup");
+  else switchView("chat");
+}
 
-const initialView = new URLSearchParams(window.location.search).get("view");
-if (initialView === "documents") switchView("documents");
-else if (initialView === "settings") switchView("settings");
-else if (initialView === "setup") switchView("setup");
-else if (!bothKeysConfigured()) switchView("setup");
-else switchView("chat");
+boot();

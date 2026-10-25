@@ -2,8 +2,8 @@
 
 设计要点
 --------
-1. **敏感信息（API Key）只从「系统环境变量」读取**，通过 ``os.getenv()`` 获取，
-   绝不写入 ``.env``、绝不落盘、绝不出现在日志里。
+1. **敏感信息（API Key）优先从「系统环境变量」读取**；缺失时从 Windows DPAPI
+   加密的本机文件读取，再由设置页写入。Key 绝不写入 ``.env``、绝不进日志。
 2. **非敏感参数**（模型名、检索参数、路径等）从项目根目录的 ``.env`` 读取，
    ``.env.example`` 是模板。
 3. 配置缺失时**立即抛错并给出可照做的修复步骤**，而不是等到第一次调接口才失败。
@@ -32,7 +32,7 @@ PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 
 ENV_FILE: Path = PROJECT_ROOT / ".env"
 
-#: 必须由系统环境变量提供的密钥（不写入任何文件）
+#: 必须提供的两个密钥（系统环境变量优先，缺失时读本机 DPAPI 存储）
 REQUIRED_SECRETS: tuple[str, ...] = ("DEEPSEEK_API_KEY", "DASHSCOPE_API_KEY")
 
 #: 阿里云百炼嵌入接口的单次批量硬上限
@@ -49,11 +49,14 @@ class ConfigError(RuntimeError):
 def _secret_setup_hint(name: str) -> str:
     """生成「如何配置该环境变量」的可照做提示。"""
     return (
-        f"缺少必需的环境变量 {name}。\n"
+        f"缺少必需的 API Key：{name}。\n"
         f"\n"
-        f"本项目的 API Key 只从「操作系统环境变量」读取，不写入 .env 文件。\n"
+        f"配置方式（任选其一）：\n"
+        f"  1. 启动应用后，在首次引导或设置页保存 Key；\n"
+        f"     会使用 Windows DPAPI 加密写入 data/secrets.dat。\n"
+        f"  2. 配置操作系统环境变量（已有环境变量优先）。\n"
         f"\n"
-        f"配置方法（Windows）：\n"
+        f"环境变量配置方法（Windows）：\n"
         f"  永久生效（需重开终端 / IDE 才会生效）：\n"
         f"      setx {name} \"你的key\"\n"
         f"  仅当前会话临时生效：\n"
@@ -242,7 +245,10 @@ def get_settings() -> Settings:
     Raises:
         ConfigError: 密钥缺失，或参数取值非法。
     """
-    # 1) 先检查密钥，给出可照做的指引
+    # 1) 先加载本机 DPAPI 加密 Key（已有系统环境变量优先），再检查密钥
+    from app.local_secrets import load_local_secrets_into_env
+
+    load_local_secrets_into_env()
     missing = [name for name in REQUIRED_SECRETS if not (os.environ.get(name) or "").strip()]
     if missing:
         raise ConfigError("\n".join(_secret_setup_hint(name) for name in missing))

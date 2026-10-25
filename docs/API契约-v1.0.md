@@ -4,7 +4,7 @@
 >
 > | 项 | 值 |
 > |---|---|
-> | 状态 | **Partially implemented**（P0–P3 已实现；P4 Key 设置未实现） |
+> | 状态 | **Implemented（P0–P4）**；统一错误结构 / X-Request-ID 仍待补 |
 > | 日期 | 2026-10-25 |
 > | 前缀 | `/api/v1` |
 > | 本地模式 | `127.0.0.1`，无登录，固定 `tenant_id="local"` |
@@ -20,7 +20,7 @@
 | 文档上传 / job | ✅ 已实现 | 后台串行任务；状态枚举见 §四 |
 | 文档列表 / 软删除 / 恢复 / 彻底删除 | ✅ 已实现 | `document_id` 当前使用 `file_hash` |
 | 索引重建 / job | ✅ 已实现 | 保留已移出文档，不重新激活 |
-| Key 设置 | ⏳ 未实现 | 当前 Key 来自系统环境变量 |
+| Key 设置 | ✅ 已实现 | DPAPI 本机加密存储；`settings/secrets` CRUD + test；系统环境变量优先 |
 | 统一错误结构 / `X-Request-ID` | ⏳ 未实现 | 当前 FastAPI 默认错误体；接入前端前需补齐 |
 | `document_id` ULID | ⏳ 未切换 | 当前 `file_hash`；服务器 Beta 全量重建时切换 |
 

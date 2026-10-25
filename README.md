@@ -6,7 +6,7 @@
 
 **定位**：单用户、本地运行、不对外发布。
 
-**当前状态**：M1（文档索引）和 M2（检索生成）已完成，M3 Web API 已完成到聊天 SSE；UI 壳已从 `prototype/ui` 迁入 `templates/` + `app/static/`，聊天页已接 `/api/v1/chat` SSE，来源面板接真实 `sources`；文档页已接列表/上传/删除/重建 API。设置页仍是 mock，真实问答与文档操作需先在系统环境变量配置 DeepSeek / DashScope Key。
+**当前状态**：M1（文档索引）和 M2（检索生成）已完成，M3 Web API 已完成到聊天 SSE；UI 壳已从 `prototype/ui` 迁入 `templates/` + `app/static/`，聊天页已接 `/api/v1/chat` SSE 与真实 `sources`，文档页已接列表/上传/删除/重建 API，设置页已接 Key 保存/测试/清除（Windows DPAPI）。真实问答与文档操作需配置系统环境变量，或在首次引导/设置页保存本机 Key。
 
 ---
 
@@ -33,7 +33,7 @@
 | 兜底防幻觉 | ✅ 已实现 | 无有效引用时返回“知识库中没有相关信息。” |
 | 文档管理 API | ✅ 已实现 | 列表 / 上传 job / 软删除 / 恢复 / 彻底删除 / 重建 |
 | Web API | ✅ 已实现 | FastAPI + SSE；`/docs` 可调通已实现接口 |
-| Web 页面 | 🟡 进行中 | 聊天 + 文档页已接真实 API；设置页仍为 mock |
+| Web 页面 | 🟡 进行中 | 聊天 / 文档 / 设置页均已接真实 API；待真实 Key 闭环与 M3 验收 |
 | 多轮对话 | ⏳ 未开始 | Sprint 4（T-6） |
 | 一键启动脚本 | ⏳ 未实现 | Sprint 4（T-7.2） |
 
@@ -80,14 +80,16 @@ RAG_konwledge_base_system/
 ### 1. 前置要求
 
 - Python 3.11+
-- 已配置好两个**系统环境变量**（不是 `.env`）：
+- 两个 API Key 可通过任一方式提供：
+  - 系统环境变量（推荐给开发/自动化）
+  - 启动后在首次引导或设置页保存（Windows DPAPI 本机加密）
 
-| 环境变量 | 用途 |
+| Key | 用途 |
 |---|---|
 | `DEEPSEEK_API_KEY` | 调用 DeepSeek 生成回答 |
 | `DASHSCOPE_API_KEY` | 调用阿里云百炼嵌入模型 |
 
-> Windows 配置方式：`setx DEEPSEEK_API_KEY "sk-xxx"`，**配置后需重开终端**才生效。
+> 环境变量方式：`setx DEEPSEEK_API_KEY "sk-xxx"`，**配置后需重开终端**才生效。设置页保存的 Key 会写入 `data/secrets.dat`（DPAPI 加密，已 gitignore）。
 
 ### 2. 安装依赖
 
@@ -107,7 +109,7 @@ Copy-Item .env.example .env
 # 按需修改 .env 中的模型名、检索参数、路径
 ```
 
-`.env` 只放非敏感参数；两个 API Key 继续走系统环境变量。
+`.env` 只放非敏感参数；两个 API Key 可走系统环境变量，也可在首次引导/设置页保存到本机 DPAPI 加密存储。
 
 ### 4. 启动 API
 
@@ -121,7 +123,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 启动后：
 
-- 首页：<http://127.0.0.1:8000/>（聊天/文档页已接 API；设置页仍为 mock）
+- 首页：<http://127.0.0.1:8000/>（聊天/文档/设置三页已接 API）
 - Swagger：<http://127.0.0.1:8000/docs>
 - 健康检查：<http://127.0.0.1:8000/api/v1/health>
 
@@ -173,7 +175,7 @@ python -m http.server 8765 --bind 127.0.0.1 --directory prototype/ui
 # http://127.0.0.1:8765/
 ```
 
-正式页面的聊天页和文档页已接真实 API；设置页仍是 mock。真实问答与上传需要在启动前配置好系统环境变量 `DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY`。`prototype/ui` 仅保留用于对照设计，不再作为运行页面。
+正式页面的聊天页、文档页和设置页已接真实 API；真实问答与上传需要系统环境变量，或在首次引导/设置页保存本机 DPAPI Key。`prototype/ui` 仅保留用于对照设计，不再作为运行页面。
 
 ---
 
@@ -300,6 +302,6 @@ chore(T-0.2): 锁定依赖版本
 ## 注意事项
 
 - **本仓库为公开仓库**：提交前务必确认没有密钥、原始文档、向量数据被误提交（`.gitignore` 已覆盖，但仍需自查）。
-- **API Key 只走系统环境变量**，不写入任何文件。
+- **API Key 不写入 `.env`/代码/仓库**；系统环境变量优先，设置页保存的 Key 使用 Windows DPAPI 加密存在 `data/secrets.dat`。
 - **Windows 中文路径**：Chroma 1.5.9 在含中文的目录下不会写 HNSW 索引文件（重启后报 `Error loading hnsw index`）。本机用目录联接 `D:\rag_chroma_link` 指向项目 `data/chroma`，并在 `.env` 设置 `CHROMA_DIR=D:/rag_chroma_link`；其他中文路径环境需同样处理。
 - **嵌入维度一经确定不要更改**（当前 1024），否则全部历史向量失效，必须整库重建。

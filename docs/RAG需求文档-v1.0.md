@@ -398,8 +398,7 @@ flowchart LR
 
 ### NFR-4 安全与隐私
 
-- API Key **不写入代码、不提交仓库**；当前 V1 从操作系统环境变量读取（`DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY`）。
-- 本地分发版目标：Windows DPAPI / keyring 保存；服务器模式：每用户加密密钥库。具体实现边界见 [架构演进设计](架构演进设计.md)，接口见 [API 契约](API契约-v1.0.md)。
+- API Key **不写入代码、不提交仓库**；当前 V1 支持两条来源：系统环境变量优先，缺失时读取本机 Windows DPAPI 加密存储（设置页写入的 `data/secrets.dat`）；服务器模式目标：每用户加密密钥库。具体实现边界见 [架构演进设计](架构演进设计.md)，接口见 [API 契约](API契约-v1.0.md)。
 - 服务仅绑定 `127.0.0.1`，不监听 `0.0.0.0`。
 - 数据流向说明：文档原文留在本机；仅 **chunk 文本片段**会发送至 Qwen（嵌入）和 DeepSeek（生成）——需使用者知情。
 
@@ -508,9 +507,10 @@ flowchart TB
 
 ```dotenv
 # ===== 云端模型凭证 =====
-# Key 不写入 .env；从操作系统环境变量读取：
+# Key 不写入 .env；系统环境变量优先，缺失时从设置页保存的
+# Windows DPAPI 加密文件读取（data/secrets.dat）：
 # DEEPSEEK_API_KEY / DASHSCOPE_API_KEY
-# 缺失 Key 时启动会给出配置提示，而不是静默失败
+# 两者都缺失时，聊天/上传按 CONFIG_MISSING 返回提示
 
 DEEPSEEK_BASE_URL=https://api.deepseek.com
 

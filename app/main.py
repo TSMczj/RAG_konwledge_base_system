@@ -1,12 +1,10 @@
 """RAG 知识库 Web 应用入口（对应 FR-12 / T-5.1）。
 
-当前阶段只提供：
-- `/` 占位首页；
+提供：
+- `/` 定稿 UI（聊天 / 文档 / 设置 / 引导）；
 - `/api/v1/health` 健康检查；
-- `/docs` Swagger；
-- `/static` 静态资源挂载。
-
-文档接口 / 聊天 SSE 会在 T-5.3 / T-5.4 接入；首页模板在 UI 定稿后再替换。
+- 聊天 SSE、文档管理、索引重建、设置 Key API；
+- `/docs` Swagger 与 `/static` 静态资源。
 """
 
 from __future__ import annotations
@@ -21,6 +19,7 @@ from app.api.chat import router as chat_router
 from app.api.documents import router as documents_router
 from app.api.health import router as health_router
 from app.api.index import router as index_router
+from app.api.settings import router as settings_router
 from app.config import PROJECT_ROOT
 from app.logging_config import setup_logging
 
@@ -45,6 +44,7 @@ def create_app() -> FastAPI:
     app.include_router(chat_router, prefix="/api/v1")
     app.include_router(documents_router, prefix="/api/v1")
     app.include_router(index_router, prefix="/api/v1")
+    app.include_router(settings_router, prefix="/api/v1")
 
     if STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

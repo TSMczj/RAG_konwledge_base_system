@@ -25,6 +25,8 @@ data/uploads/*
 !data/uploads/.gitkeep
 data/chroma/*
 !data/chroma/.gitkeep
+data/secrets.dat
+data/secrets.dat.tmp
 data/*.db
 data/*.sqlite
 data/*.sqlite3
