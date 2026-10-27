@@ -1,4 +1,4 @@
-﻿# RAG 知识库
+# RAG 知识库
 
 ### 把散落的文档，变成一个可以追问、可以核对的私人知识库
 
@@ -48,9 +48,9 @@
 | 能力 | 说明 |
 |---|---|
 | 多格式导入 | PDF / DOCX / TXT；保留页码、表格结构与来源元数据 |
-| 向量检索 | Qwen `text-embedding-v4`，1024 维，Chroma cosine Top-K |
+| 向量检索 | Qwen `text-embedding-v4`，1024 维，Chroma cosine Top-K；低于 `MIN_SCORE`（默认 0.25）的片段不进入上下文 |
 | 带出处回答 | 回答标注 `[n] 文件名 · 第 x 页`，来源面板可展开原文 |
-| 防幻觉兜底 | 没有可用上下文或没有有效引用时，返回“知识库中没有相关信息。” |
+| 防幻觉兜底 | 没有可用上下文或没有有效引用时，返回“知识库中没有相关信息。”；问候/闲聊则暖心回应且不标引用 |
 | 多轮追问 | 内存保留最近 5 轮，追问先改写为独立查询再检索 |
 | 文档管理 | 上传 job、进度轮询、软删除、恢复、彻底删除、全量重建 |
 | Key 设置 | 首次引导 / 设置页保存、测试连接、清除；DPAPI 本机加密 |
@@ -144,7 +144,7 @@ Copy-Item .env.example .env
 | 生成 | DeepSeek `deepseek-v4-flash` |
 | 解析 | PyMuPDF + pdfplumber（PDF）、python-docx（Word） |
 | 配置 / 日志 | pydantic-settings / loguru |
-| 测试 | pytest（133 项） |
+| 测试 | pytest（147 项） |
 
 ---
 
@@ -187,7 +187,10 @@ RAG_konwledge_base_system/
 - **单用户、本地运行**：没有登录，也不监听公网；适合个人电脑或可信内网单机。
 - **依赖云端模型**：嵌入和生成仍会调用 DashScope / DeepSeek；不是完全离线方案。
 - **会话在内存里**：重启服务会清空最近 5 轮历史。
-- **全量重建成本较高**：会重新消耗嵌入额度；V1 不提供取消/断点。
+- **图片不入库**：V1 只索引文本与表格，PDF 里的图片和扫描页不参与检索，也没有 OCR。
+- **格式边界**：V1 只支持 PDF / DOCX / TXT；Markdown、HTML、独立图片和扫描件尚未接入。
+- **全量重建成本较高**：会重新消耗嵌入额度；V1 不提供取消/断点。重建会先算完向量再替换，失败时旧索引保持不变。
+- **库外问题也会调用生成模型**：为区分闲聊与知识问题，没有检索结果时仍会请求一次 DeepSeek；引用兜底保证不展示无出处的知识回答。
 - **模型选择器目前只实际启用 DeepSeek**：OpenAI / Anthropic 是 V2 的多模型规划。
 
 这些不是“忽略的问题”，而是 V1 明确的范围。后续会按 [V1 问题与优化收集](docs/V1问题与优化收集.md) 转成 V2 需求。
@@ -197,6 +200,9 @@ RAG_konwledge_base_system/
 ## Roadmap
 
 - **V2 · 多模型**：Provider 注册表，接入 OpenAI-compatible、Anthropic、GLM、MiMo；聊天页按回答记录模型。
+- **V2 · 多格式与多模态文档**：Markdown / README / HTML 与章节级引用；扫描 PDF、独立图片（MinerU + DeepSeek Flash Vision）。
+- **V2 · 检索质量**：BM25 + dense 混合、rerank、contextual chunking，面向大语料。
+- **V2 · 评估与规模**：多格式 golden set、引用支持度/拒答评估；按阈值评估 pgvector / Qdrant。
 - **V2 · 会话持久化**：SQLite 保存历史，重启后可继续追问。
 - **V2 · 任务可靠性**：job 持久化、取消、失败重试与断点。
 - **V2 · 工程规范**：统一错误结构 / `X-Request-ID`，稳定 `document_id`。

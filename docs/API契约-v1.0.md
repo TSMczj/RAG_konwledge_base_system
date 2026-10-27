@@ -4,14 +4,14 @@
 >
 > | 项 | 值 |
 > |---|---|
-> | 状态 | **Implemented（P0–P4）**；统一错误结构 / X-Request-ID 仍待补 |
+> | 状态 | **Implemented（P0–P4）**；未处理异常已统一 JSON，HTTPException 包装与 `X-Request-ID` 响应头仍待补 |
 > | 日期 | 2026-10-25 |
 > | 前缀 | `/api/v1` |
 > | 本地模式 | `127.0.0.1`，无登录，固定 `tenant_id="local"` |
 > | 服务器模式 | 登录后从 session 推导 tenant；未认证 401 |
 > | 关联 | [文档地图](README.md) · [架构演进设计](架构演进设计.md) · [需求文档](RAG需求文档-v1.0.md) · [任务清单](RAG开发任务清单-v1.0.md) |
 
-### 实现状态（2026-10-25）
+### 实现状态（2026-10-26）
 
 | 模块 | 状态 | 当前实现说明 |
 |---|---|---|
@@ -19,9 +19,9 @@
 | `POST /chat` SSE | ✅ 已实现 | 真实流式验收通过；无引用时 `done.answer` 回退固定话术 |
 | 文档上传 / job | ✅ 已实现 | 后台串行任务；状态枚举见 §四 |
 | 文档列表 / 软删除 / 恢复 / 彻底删除 | ✅ 已实现 | `document_id` 当前使用 `file_hash` |
-| 索引重建 / job | ✅ 已实现 | 保留已移出文档，不重新激活 |
+| 索引重建 / job | ✅ 已实现 | 先算完再替换；失败保留旧索引；保留已移出文档的向量 |
 | Key 设置 | ✅ 已实现 | DPAPI 本机加密存储；`settings/secrets` CRUD + test；系统环境变量优先 |
-| 统一错误结构 / `X-Request-ID` | ⏳ 未实现 | 当前 FastAPI 默认错误体；接入前端前需补齐 |
+| 统一错误结构 / `X-Request-ID` | ⏳ 部分实现 | 未处理 500 已统一为 `{code,message,detail,retryable,request_id}` 并记录堆栈；HTTPException 包装与响应头 `X-Request-ID` 待补 |
 | `document_id` ULID | ⏳ 未切换 | 当前 `file_hash`；服务器 Beta 全量重建时切换 |
 
 ---
@@ -183,6 +183,8 @@ data: {"sources":[{
 | `excerpt` | string | 原文片段，前端截断展示 |
 
 > 当前 Chroma 返回 cosine 距离；检索器负责转换为 `score = 1 - distance`，再进入契约。
+>
+> `sources` 数量可能小于 `TOP_K`：低于 `MIN_SCORE`（默认 0.25）的片段已在检索层过滤。
 
 ### 3.3 `delta`
 
@@ -200,9 +202,17 @@ data: {
   "answer": "完整回答文本",
   "rewritten_query": "多轮追问改写后的独立查询；首轮等于 question",
   "usage": {"prompt_tokens": 1200, "completion_tokens": 180},
+  "fallback": false,
+  "chat_mode": false,
   "timings": {"retrieval_ms": 220, "ttft_ms": 410, "total_ms": 2600}
 }
 ```
+
+字段：
+
+- `fallback=true`：没有有效引用，`answer` 已被替换为固定话术「知识库中没有相关信息。」；客户端应清空本轮 `sources`，不要把检索阶段先到的片段当成“引用来源”展示；
+- `chat_mode=true`：本轮是问候/闲聊或与知识库无关的输入，`answer` 是暖心回应，**不含引用**；客户端应清空本轮 `sources`、隐藏引用卡片，不要再展示检索阶段先到的片段；
+- `[[CHAT]]` 是服务端内部标记，只用于区分闲聊与知识回答，**不得出现在 `delta` / `answer` 中**。
 
 ### 3.5 `error`
 
@@ -225,8 +235,10 @@ data: {
 
 ### 3.7 无检索结果
 
-- 仍返回 `sources: []`；
-- 生成阶段必须按提示词回答“知识库中没有找到依据”，不编造；
+- 低于 `MIN_SCORE`（默认 `0.25`）的片段不进入上下文；全部低于阈值时 `sources: []`；
+- 即使没有可用片段，仍会调用一次生成模型，用来区分问候/闲聊与知识问题：
+  - `chat_mode=true`：按系统提示词第 7 条暖心回应，不带引用；
+  - 否则 `answer` 为固定话术「知识库中没有相关信息。」，`fallback=true`；
 - `done` 正常结束，不做 404。
 
 ---
@@ -263,6 +275,7 @@ files: <file2>
 - 每个文件一个 job；
 - 同一租户同一时间只运行一个索引 job，其他 `queued`；
 - 相同 `file_hash` 已存在 → `state="skipped"`，返回已有 `document_id`；
+- 同名文件（`source_file` 相同、内容哈希不同）→ 视为替换：先写临时文件再原子覆盖，新版本入库成功后清理旧版本向量（不删除当前文件）；
 - 损坏文件 → 该 job `failed`，不影响其他文件。
 
 ### `GET /api/v1/documents/uploads/{job_id}`
@@ -387,7 +400,7 @@ ready     100%
 
 - 恢复后立即可检索；
 - 不重新解析、不重新嵌入；
-- 若原文件已被删除，仍可恢复向量，但后续重建会失败；响应中给出 `warning`。
+- 若原文件已被删除，仍可恢复向量；重建会保留这些向量、不重新解析该文件，但该文档之后无法通过重建更新内容。
 
 ### 5.4 彻底删除
 
@@ -424,7 +437,9 @@ ready     100%
 `GET /api/v1/index/jobs/{job_id}` 返回与上传 job 相同的进度结构，`unit="file"`，`state` 使用 `queued/running/parsing/splitting/embedding/ready/failed`。
 
 - 只重建 `active` 文档；
-- `removed` 文档保持 removed；
+- `removed` 文档保持 removed，其向量保留（恢复仍可用）；
+- 先解析、分块并算完全部向量，最后才替换索引；任何文件失败都会中止并保留旧索引；
+- 磁盘上存在、但当前索引里缺失向量的 active 文件会被补回；
 - 同一时间只允许一个重建任务；
 - 会重新消耗嵌入额度，UI 必须提示。
 

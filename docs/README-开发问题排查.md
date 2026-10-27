@@ -7,13 +7,15 @@
 >
 > | 项 | 值 |
 > |---|---|
-> | 状态 | **Sprint 0–2 归档快照**（不代表当前 M3/M4 状态） |
-> | 适用阶段 | Sprint 0 ~ Sprint 2（项目初始化 / 文档摄入与索引 M1 / 检索生成 M2） |
-> | 代码基线 | `4e7b8b7`（T-3.6 修复，已推送） |
-> | 测试 | `63 passed`（归档时点） |
-> | 当前主库 | 10 个文件 / 4021 个 chunk |
+> | 状态 | **Sprint 0–2 归档快照 + 2026-10-26 V1 调试追加**（不代表当前 M3/M4 任务状态） |
+> | 适用阶段 | Sprint 0 ~ Sprint 2 + V1 维护期问题 |
+> | 代码基线 | `4e7b8b7`（前文归档）· `c5db572` + 2026-10-26 修复（4.14–4.17） |
+> | 测试 | `63 passed`（归档时点）；当前 `147 passed` |
+> | 当前主库 | 10 个文件 / 4021 个 chunk（归档时点）；2026-10-26 调试后为 2 / 273 |
 > | 环境 | Windows + DSH 文件沙箱 · Python 3.11.9 · Chroma 1.5.9 · LangChain 1.4.5 |
-> | 最后更新 | 2026-10-24 |
+> | 最后更新 | 2026-10-26 |
+>
+> **2026-10-26 V1 调试追加**：新增 4.14 `REBUILD-01`、4.15 `UI-01`、4.16 `UPLOAD-01`、4.17 `UI-02`；这四条以 `c5db572` + 本次修复为基线，当前测试 `147 passed`。前文 4.1–4.13 仍是 Sprint 0–2 归档快照。
 >
 > **当前状态不要看本文**：任务完成状态见 [开发任务清单](RAG开发任务清单-v1.0.md)，最新接口见 [API 契约](API契约-v1.0.md)，本机交接见 `进度与续接.md`。本文只保留“当时怎么坏的、怎么修的”。
 
@@ -93,13 +95,17 @@
 | LOG-01 | loguru `enqueue=True` 报 WinError 5 | 日志初始化失败 | multiprocessing 命名管道被沙箱限制 | 已修复（`f017d08`） |
 | PDF-01 | 解析 100 页 PDF 10 分钟未完成 | 建库卡死、日志 8.9 MB | pdfminer DEBUG 逐 token 写日志 | 已修复（`4e7b8b7`） |
 | PDF-02 | chunk 在行尾/单词中间截断 | 检索片段语义不完整 | PDF 文本层每行一个 `\n`，被 splitter 当分隔符 | 已修复（`4e7b8b7`） |
-| PDF-03 | 注意力图/结构图被识别成表格 | 假表格污染检索 | pdfplumber 只按线条检测，图也有线条 | 部分修复（attention 清零；BERT 6 个已知） |
+| PDF-03 | 注意力图/结构图被识别成表格 | 假表格污染检索 | pdfplumber 只按线条检测，图也有线条 | 已修复（2026-10-26：填充率/有效行/特殊 token，BERT 清零） |
 | VEC-01 | `count()` 正常，重启报 HNSW 加载失败 | 索引不可用 | Chroma 1.5.9 在中文路径下不写 HNSW `.bin` | 已修复（ASCII 目录联接） |
 | VEC-02 | 客户端未关闭 / API 不兼容 | HNSW 可能未完整落盘；调用报错 | Chroma 客户端需显式 close；langchain-chroma 无公开 upsert/count | 已修复 |
 | QUOTA-01 | 1M 嵌入额度接近用完 | 不能反复全量重建 | 多次修复重建 + `--rebuild` 重复嵌入 | 已解决（充值后全量重建 4021→4021） |
 | MODEL-01 | DeepSeek 默认思考模式 | 响应慢、token 高、小 `max_tokens` 正文为空 | `deepseek-v4-flash` 默认返回 `reasoning_content` | 已修复（T-4.4 显式关闭 thinking） |
 | TEST-01 | 测试夹具与真实契约不一致 | 误报代码 bug | 合成表格行数不对；`hash-a` 不是 64 位十六进制 | 已修复 |
 | BUILD-01 | 后台建库“退出码 1” | 误判建库失败并重跑 | PowerShell 把 stderr 包装成 NativeCommandError；stdout 被缓冲 | 已规避 |
+| REBUILD-01 | 删文档后重建失败、问答全部 500 | 知识库不可用；磁盘上的文件被永久跳过 | 重建先清空后重建、失败无回滚；job 失败无日志；进程内 Chroma 状态异常 | 已修复（2026-10-26） |
+| UI-01 | 聊天报 `body stream already read` | 真实 500 被掩盖 | 错误响应先 `json()` 再 `text()`，body 被读两次 | 已修复（2026-10-26） |
+| UPLOAD-01 | 同名文件重传留下旧版本 | 重复文档、误删当前文件 | 直接覆盖磁盘，旧 hash 向量未清理 | 已修复（2026-10-26） |
+| UI-02 | 表格来源显示原始 Markdown；兜底仍显示来源 | 引用不可读、误导 | 前端未按 `kind` 渲染；fallback 未清 sources | 已修复（2026-10-26） |
 
 ---
 
@@ -477,9 +483,19 @@ _TABLE_WIDE_MIN_NUMERIC = 0.15
 | TSLA 10-K | 55 | 正常，财报宽表保留 |
 | handbook-872p.docx | 2 | 正常 |
 | attention.pdf | 0 | 假表清零 |
-| bert.pdf | 6 | 结构图碎片，已知限制 |
+| bert.pdf | 0 | 2026-10-26 结构图碎片清零 |
 
 查询 `LM358 的电源电压范围是多少？` 能命中 `lm358.pdf` 的规格表，说明真实表格仍在。
+
+#### 2026-10-26 更新
+
+BERT 的 6 个结构图碎片已不是“已知限制”：新增三层过滤后清零。
+
+- 非空单元格占比 < 30% → 拒绝（稀疏版式框）；
+- 3 行以上的表至少 2 行“有效行”（含 ≥2 个非空单元格）→ 拒绝只有表头有内容的图内表格；
+- 单元格出现 `[CLS]` / `[SEP]` / `[MASK]` / `[PAD]` → 判为 NLP 结构图标签，拒绝。
+
+回归结果：BERT 表格 chunk 6 → 0，文本 segment 22 → 16，重建后 171 个 chunk；attention 仍为 0。真实表格用合成用例覆盖：稀疏小表（lm358 型）、宽表（财报型）、密集小表均保留。由于 lm358/TSLA 原文件已被移出，本次无法重跑它们的真实表数量。
 
 #### 经验
 
@@ -781,6 +797,201 @@ T-4.4 接入生成模型时二选一：
 #### 经验
 
 PowerShell 下跑 Python CLI，优先 `python -u` + 文件重定向；退出码与业务结果要分开判断。
+
+---
+
+### 4.14 REBUILD-01：删文档后重建失败、问答全部 500
+
+#### 现象
+
+1. 在文档页移出/彻底删除多份文档后，点“重建索引”，前端提示“重建索引失败”；
+2. 之后对话页**任何问题**都失败，包括“你好”和库外问题：
+
+   ```text
+   请求失败：Failed to execute 'text' on 'Response': body stream already read
+   ```
+
+3. `GET /api/v1/health` 仍是 200；`GET /api/v1/documents` 和 `POST /api/v1/chat` 都返回**纯文本** `Internal Server Error`；
+4. 日志停在“嵌入完成: 102 条”，没有“向量入库”，也没有异常堆栈；库内只剩 102 个 chunk。
+
+#### 分析过程
+
+1. `health` 不打开 Chroma；`documents` / `chat` 都会构造 `VectorStore`。因此先怀疑 Chroma 初始化，而不是 Key 或模型。
+2. 用独立进程直接打开同一个 Chroma 目录能正常 `count()=102`，说明磁盘索引没坏；问题在**服务进程内**的 Chroma 状态。
+3. 对比日志时间线：`delete_all: 282` → attention 解析/嵌入 102 条 → job 没有完成日志。旧 `rebuild` 是“先清空、再逐文件建”，失败时索引已经被清空。
+4. 旧 `JobManager._run` 只把异常写进 `job.error`，不写日志；原始异常因此丢失。
+5. 重启服务后 `documents` 立刻恢复 200；再次重建也能跑通。说明失败的 job 让进程内 Chroma 客户端/共享状态不可再用。
+6. 更隐蔽的一层：旧 `rebuild` 用“重建前索引里的 active 哈希”当白名单。索引被上一次失败清空后，磁盘上仍在的 `bert.pdf` 不在白名单里，于是**每次重建都被当成“已移出”跳过**，永久丢失。
+
+#### 根因
+
+- **破坏性重建**：`delete_all()` 在教学/演示里没问题，但本地真实数据一旦中途失败就没有回滚；
+- **白名单来源错误**：用正在被清空的索引判断“哪些文件该保留”；
+- **job 失败无堆栈**：前端只有一句“重建索引失败”，服务端没有可定位信息；
+- **前端二次读 body**：非 JSON 500 被错误处理路径覆盖成 `body stream already read`（见 4.15）。
+
+#### 解决
+
+| 文件 | 改动 |
+|---|---|
+| [`app/services/documents.py`](../app/services/documents.py) | 重建改为「先解析+分块全部文件 → 再算完全部向量 → 最后替换」；任何文件失败立即中止，旧索引不动；已移出文件的向量用 `preserve_ids` 保留 |
+| [`app/core/vectorstore.py`](../app/core/vectorstore.py) | 新增 `embed_documents()` 与 `replace_all()`：先 upsert 新 chunk，再删除多余旧 id，不再先 `delete_all()` |
+| [`app/services/jobs.py`](../app/services/jobs.py) | job 开始/失败/结束都写日志，失败带完整堆栈 |
+| [`app/main.py`](../app/main.py) | 未处理异常统一返回 JSON `{code,message,detail,retryable,request_id}` 并记录日志 |
+| [`app/static/app.js`](../app/static/app.js) | 错误响应只读一次 body（详见 4.15） |
+
+#### 验证
+
+- **失败路径**：在 `data/uploads` 放一个损坏的 `__broken_test.pdf` 后触发重建：
+  - job 返回 `DocumentError: 重建中止，索引未改动：__broken_test.pdf: FileDataError ...`；
+  - 之后文档列表仍是 **2 文件 / 282 chunk**，问答仍返回 200 并带 `[n]` 引用；
+  - 删除损坏文件后重建成功。
+- **恢复路径**：`bert.pdf` 在“磁盘上有文件、索引里没有向量”的状态下被重建补回，最终 attention 102 + bert 180 = **282 chunk**。
+- **回归测试**：新增 4 项重建用例（补回丢失文件、失败保留旧索引、软删除保持移出、软删除向量可恢复）；本次维护批次结束后的全套为 `147 passed`（当时为 137）。
+- **原始异常**：失败当时没有 job 堆栈，具体异常类型无法还原；同类失败现在会以 `DocumentError` + traceback 落日志。
+
+#### 经验
+
+- **重建不要“先删后建”**：先把解析、分块、嵌入全部算完，再动索引。
+- **判断哪些文件保留，不能用正在被删除的索引当唯一事实源**；磁盘文件 + 明确的移出状态才是输入。
+- job 失败必须落日志，否则用户只能看到一句“失败”。
+- 本地单用户也会遇到“失败后整个服务不可用”；失败路径要和成功路径一样做验证。
+
+---
+
+### 4.15 UI-01：非 JSON 500 被二次读取，真实错误被掩盖
+
+#### 现象
+
+对话页每条消息都显示：
+
+```text
+请求失败：Failed to execute 'text' on 'Response': body stream already read
+```
+
+看起来像前端 bug，但服务端实际返回的是 500。
+
+#### 分析过程
+
+1. 打开 `app/static/app.js` 的 `streamChatFromApi()`；
+2. `!response.ok` 分支先 `await response.json()`；
+3. 服务端返回纯文本 `Internal Server Error` 时，`json()` 抛错，此时 body 已被消费；
+4. `catch` 里再 `await response.text()`，浏览器抛 `TypeError: body stream already read`；
+5. 原始 500 和状态码被这个 TypeError 完全覆盖。
+
+#### 根因
+
+Fetch 的 `Response` body 只能消费一次；错误处理路径没有遵守这一点。
+
+#### 解决
+
+```js
+const raw = await response.text();
+let detail = raw.trim();
+try {
+  const body = JSON.parse(raw);
+  detail =
+    body?.detail?.message ||
+    (typeof body?.detail === "string" ? body.detail : "") ||
+    body?.message ||
+    raw.trim();
+} catch {
+  // 保留原始文本
+}
+throw new Error(`${response.status}${detail ? ` · ${detail.slice(0, 300)}` : ""}`);
+```
+
+同时后端把未处理异常统一成 JSON（见 4.14），前端就能直接显示 `500 · Internal Server Error` 或具体的 `DocumentError`。
+
+#### 验证
+
+- `node --check app/static/app.js` 通过；
+- 正常 SSE 问答不受影响；
+- 修复后同类 500 会显示真实状态码和错误体，不再出现 `body stream already read`。
+
+#### 经验
+
+- 错误分支也要按“body 只读一次”写；
+- 后端错误结构统一后，前端不需要猜响应是不是 JSON。
+
+---
+
+### 4.16 UPLOAD-01：同名文件重传留下旧版本
+
+#### 现象
+
+同一个 `same.txt` 先后上传两版内容，文档列表出现两条同名 active 记录：
+
+```text
+total 2
+07789ebfe995 same.txt 1
+c0e732be2846 same.txt 1
+```
+
+旧版本仍参与检索；如果对旧版本执行“彻底删除”，会因为新旧版本共用 `file_path` 而把当前文件一起删掉。
+
+#### 分析过程
+
+1. `save_upload` 直接 `target.write_bytes(data)`，同名文件被原地覆盖；
+2. `index_file` 只按新 `file_hash` 入库，旧 hash 的 chunk 不会自动失效；
+3. `list_files` 按 `file_hash` 聚合，因此新旧版本各显示一条；
+4. `permanent_delete` 按 hash 找到旧记录，再用旧记录的 `file_path` 删除文件——这个路径已经指向新版本。
+
+#### 根因
+
+文件身份用“文件名”，向量身份用“内容 hash”，两者没有版本/替换语义；上传也不是原子写。
+
+#### 解决
+
+- `save_upload` 先写同目录临时文件，再 `os.replace` 原子替换；写盘失败时旧文件保持完整；
+- 新版本入库成功后，`_drop_replaced_versions` 删除同 `source_file`、不同 hash 的旧向量（不动当前文件）；
+- API 契约补充“同名上传 = 替换旧版本”的规则。
+
+#### 验证
+
+- 同一服务内上传两版 `same.txt`：active 文档 2 → 1，旧 hash 不存在；
+- 新增 `test_reupload_same_name_replaces_old_version`；
+- 全套 `147 passed`。
+
+#### 经验
+
+- 文件名不是版本；有覆盖语义时，必须显式清理旧 hash 的向量；
+- 多版本共享同一个磁盘路径时，删除动作要特别小心。
+
+---
+
+### 4.17 UI-02：表格来源显示原始 Markdown，兜底仍显示来源
+
+#### 现象
+
+- 来源卡片里出现 `| T<br>1 2 | --- |` 这样的原始 Markdown；
+- BERT 第 3/15/16 页结构图碎片也被当成表格来源；
+- 回答已经回落“知识库中没有相关信息”时，右侧仍显示 5 个“引用来源”。
+
+#### 分析过程
+
+1. `source.excerpt` 是纯文本，前端用 `escapeHtml` 放进 `<p>`，`<br>`/`|`/`---` 全部按字面显示；
+2. `kind=table` 只出现在 meta 里，渲染没有分流；
+3. BERT 结构图被 pdfplumber 误判成表格，见 4.7；
+4. `done.fallback=true` 时只设置了 `insufficient`，没有清空 `state.sources`。
+
+#### 解决
+
+- 前端新增 `renderTableExcerpt`：把 Markdown 表格解析成 HTML `<table>`，`<br>` 还原为换行，超长表格折叠；
+- 兜底回答时清空本轮 sources，并显示“本轮未采用检索片段。”；
+- 收紧 `_is_useful_table`：填充率、有效行、特殊 token 三层过滤，BERT 结构图清零。
+
+#### 验证
+
+- BERT 查询的来源 `kinds` 全部为 `text`，不再出现 `table`；
+- `renderTableExcerpt` 用 Node 实际执行验证，输出 `<table>` 且 `<br>` 正确；
+- BERT 表格 chunk 6 → 0，重建后 171 个 chunk；
+- 全套 `147 passed`。
+
+#### 经验
+
+- 来源面板必须按 `kind` 分流，不能把结构化内容当纯文本；
+- 兜底/闲聊等状态切换时，要同步清理上一阶段先渲染出来的 sources。
 
 ---
 

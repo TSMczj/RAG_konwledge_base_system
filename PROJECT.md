@@ -30,9 +30,9 @@
 | 能力 | 状态 | 说明 |
 |---|---|---|
 | 多格式摄入 | ✅ 已实现 | PDF / Word / TXT，保留页码与表格结构 |
-| 语义检索 | ✅ 已实现 | 向量相似度 Top-K 召回，默认 K=5 |
+| 语义检索 | ✅ 已实现 | 向量相似度 Top-K 召回，默认 K=5；`MIN_SCORE=0.25` 过滤低相关片段 |
 | 带出处回答 | ✅ 已实现 | CLI/API 回答标注 `[n] 文件名 · 页码`，可展开原文核对 |
-| 兜底防幻觉 | ✅ 已实现 | 无有效引用时返回“知识库中没有相关信息。” |
+| 兜底防幻觉 | ✅ 已实现 | 无有效引用时返回“知识库中没有相关信息。”；问候/闲聊暖心回应且不标引用 |
 | 文档管理 API | ✅ 已实现 | 列表 / 上传 job / 软删除 / 恢复 / 彻底删除 / 重建 |
 | Web API | ✅ 已实现 | FastAPI + SSE；`/docs` 可调通已实现接口 |
 | Web 页面 | ✅ 已实现 | 聊天 / 文档 / 设置三页接真实 API；M3 验收通过 |
@@ -156,7 +156,7 @@ uvicorn app.main:app --host 127.0.0.1 --port 8000
 # 递归扫描、强制重嵌
 .venv\Scripts\python.exe scripts\build_index.py --recursive --force
 
-# 列出 / 删除 / 重建（重建会重新消耗嵌入额度）
+# 列出 / 删除 / 重建（重建会重新消耗嵌入额度；失败时旧索引保持不变）
 .venv\Scripts\python.exe scripts\manage_index.py --list
 .venv\Scripts\python.exe scripts\manage_index.py --delete <file_hash或文件名>
 .venv\Scripts\python.exe scripts\manage_index.py --rebuild
