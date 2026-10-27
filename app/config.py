@@ -120,6 +120,10 @@ class Settings(BaseSettings):
 
     # ---------- 检索与生成参数 ----------
     top_k: int = Field(default=5, description="检索返回条数")
+    min_score: float = Field(
+        default=0.25,
+        description="最低相似度阈值（0~1）；低于该值的片段不进入上下文，避免无关内容污染回答",
+    )
     max_context_tokens: int = Field(default=6000, description="拼进提示词的上下文上限")
     temperature: float = Field(default=0.2, description="生成温度，RAG 场景建议 0.0~0.3")
     max_history_turns: int = Field(default=5, description="多轮对话保留轮数")
@@ -168,6 +172,13 @@ class Settings(BaseSettings):
             raise ValueError("TOP_K 必须 >= 1")
         return v
 
+    @field_validator("min_score")
+    @classmethod
+    def _check_min_score(cls, v: float) -> float:
+        if not 0.0 <= v <= 1.0:
+            raise ValueError("MIN_SCORE 必须在 0.0 ~ 1.0 之间")
+        return v
+
     @field_validator("chunk_size", "chunk_overlap", "max_context_tokens", "max_history_turns")
     @classmethod
     def _check_positive(cls, v: int, info) -> int:
@@ -205,6 +216,7 @@ class Settings(BaseSettings):
             "embedding_dim": self.embedding_dim,
             "embedding_batch_size": self.embedding_batch_size,
             "top_k": self.top_k,
+            "min_score": self.min_score,
             "max_context_tokens": self.max_context_tokens,
             "temperature": self.temperature,
             "max_history_turns": self.max_history_turns,

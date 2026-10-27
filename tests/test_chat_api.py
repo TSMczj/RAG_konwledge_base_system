@@ -148,8 +148,8 @@ def test_chat_multi_turn_rewrites_follow_up(monkeypatch) -> None:
     session_store.clear("sess_multi_turn_test")
 
 
-def test_chat_no_context_returns_fixed_answer_without_llm(monkeypatch) -> None:
-    llm = FakeLLM([LLMDelta(text="不应调用")])
+def test_chat_no_context_falls_back_after_generation(monkeypatch) -> None:
+    llm = FakeLLM([LLMDelta(text="根据当前知识库无法确定。")])
     service = FakeService(FakeRetriever(_retrieval()), llm)
     _patch(monkeypatch, service)
 
@@ -158,9 +158,25 @@ def test_chat_no_context_returns_fixed_answer_without_llm(monkeypatch) -> None:
     events = _events(response.text)
     assert [name for name, _ in events] == ["sources", "delta", "done"]
     assert events[0][1]["sources"] == []
-    assert events[1][1]["text"] == NO_ANSWER
+    assert events[1][1]["text"] == "根据当前知识库无法确定。"
+    assert events[2][1]["answer"] == NO_ANSWER
     assert events[2][1]["fallback"] is True
-    assert llm.called is False
+    assert events[2][1]["chat_mode"] is False
+    assert llm.called is True
+
+
+def test_chat_no_context_greeting_uses_chat_mode(monkeypatch) -> None:
+    llm = FakeLLM([LLMDelta(text="[[CHAT]]你好！有什么关于知识库的问题，随时问我。")])
+    service = FakeService(FakeRetriever(_retrieval()), llm)
+    _patch(monkeypatch, service)
+
+    response = client.post("/api/v1/chat", json={"question": "你好"})
+
+    events = _events(response.text)
+    done = events[-1][1]
+    assert done["answer"] == "你好！有什么关于知识库的问题，随时问我。"
+    assert done["fallback"] is False
+    assert done["chat_mode"] is True
 
 
 def test_chat_without_citations_falls_back_in_done(monkeypatch) -> None:
@@ -175,6 +191,30 @@ def test_chat_without_citations_falls_back_in_done(monkeypatch) -> None:
     events = _events(response.text)
     assert events[-1][1]["answer"] == NO_ANSWER
     assert events[-1][1]["fallback"] is True
+
+
+def test_chat_mode_keeps_greeting_and_hides_marker(monkeypatch) -> None:
+    service = FakeService(
+        FakeRetriever(_retrieval(_source())),
+        FakeLLM([
+            LLMDelta(text="[[CH"),
+            LLMDelta(text="AT]]你好！有什么关于知识库的问题，随时问我。"),
+        ]),
+    )
+    _patch(monkeypatch, service)
+
+    response = client.post("/api/v1/chat", json={"question": "你好"})
+
+    events = _events(response.text)
+    deltas = "".join(payload["text"] for name, payload in events if name == "delta")
+    done = events[-1][1]
+    assert "[[CHAT]]" not in deltas
+    assert "[[CH" not in deltas
+    assert deltas.startswith("你好！")
+    assert done["chat_mode"] is True
+    assert done["fallback"] is False
+    assert done["answer"].startswith("你好！")
+    assert "[[CHAT]]" not in done["answer"]
 
 
 def test_chat_stream_error_event(monkeypatch) -> None:

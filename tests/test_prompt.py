@@ -46,6 +46,8 @@ def test_prompt_has_system_rules_and_numbered_context() -> None:
     system = bundle.messages[0]["content"]
     assert "只使用 <context>" in system
     assert "根据当前知识库无法确定" in system
+    assert "7. 如果用户输入是问候" in system
+    assert "[[CHAT]]" in system
     assert "[1] attention.pdf · 第 2 页 · 正文" in system
     assert "[2] attention.pdf · 第 5 页 · 正文" in system
     assert "问题：Transformer" in bundle.messages[1]["content"]
@@ -59,6 +61,8 @@ def test_no_sources_uses_no_context() -> None:
     assert NO_CONTEXT in bundle.context
     assert bundle.used_sources == ()
     assert bundle.dropped_sources == ()
+    assert "本轮没有检索到达到相似度阈值" in bundle.messages[1]["content"]
+    assert "[[CHAT]]" in bundle.messages[1]["content"]
 
 
 def test_context_budget_drops_lowest_scores() -> None:

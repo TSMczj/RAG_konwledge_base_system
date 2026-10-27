@@ -62,9 +62,9 @@ def _settings() -> SimpleNamespace:
     return SimpleNamespace(max_context_tokens=6000, temperature=0.2, top_k=5)
 
 
-def test_no_context_returns_fixed_answer_without_llm() -> None:
+def test_no_context_falls_back_when_llm_has_no_citation() -> None:
     retriever = FakeRetriever(_retrieval())
-    llm = FakeLLM("不应该被调用")
+    llm = FakeLLM("根据当前知识库无法确定。")
     service = QAService(retriever=retriever, llm=llm, settings=_settings())
 
     result = service.answer("库外问题")
@@ -72,8 +72,21 @@ def test_no_context_returns_fixed_answer_without_llm() -> None:
     assert result.no_context is True
     assert result.answer == NO_ANSWER
     assert result.citations == ()
-    assert result.llm is None
-    assert llm.called is False
+    assert llm.called is True
+    assert result.llm is not None
+
+
+def test_no_context_chat_marker_returns_greeting() -> None:
+    retriever = FakeRetriever(_retrieval())
+    llm = FakeLLM("[[CHAT]]你好！有什么关于知识库的问题，随时问我。")
+    service = QAService(retriever=retriever, llm=llm, settings=_settings())
+
+    result = service.answer("你好")
+
+    assert result.chat_mode is True
+    assert result.no_context is False
+    assert result.answer == "你好！有什么关于知识库的问题，随时问我。"
+    assert result.citations == ()
 
 
 def test_parse_citations_maps_and_deduplicates() -> None:
@@ -122,6 +135,19 @@ def test_answer_without_citations_falls_back_to_fixed_text() -> None:
     assert result.citations == ()
     assert result.no_context is True
     assert result.llm is not None
+
+
+def test_chat_marker_keeps_greeting_without_fallback() -> None:
+    retriever = FakeRetriever(_retrieval(_source("a.pdf", 3, "无关片段")))
+    llm = FakeLLM("[[CHAT]]你好！有什么关于知识库的问题，随时问我。")
+    service = QAService(retriever=retriever, llm=llm, settings=_settings())
+
+    result = service.answer("你好")
+
+    assert result.chat_mode is True
+    assert result.answer == "你好！有什么关于知识库的问题，随时问我。"
+    assert result.citations == ()
+    assert result.no_context is False
 
 
 def test_empty_answer_raises() -> None:

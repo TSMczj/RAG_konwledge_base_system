@@ -1,6 +1,6 @@
 /* ============================================================
    RAG 知识库 UI
-   聊天页与文档页已接 FastAPI；设置页仍为原型 mock。
+   聊天、文档、设置三页均已接 FastAPI。
    ============================================================ */
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -608,12 +608,6 @@ function renderConversation() {
         <img class="empty-illustration" src="/static/assets/hero-books.jpg" alt="打开的书本通向知识天空">
         <h3>从你的知识库开始提问</h3>
         <p>已索引 ${activeDocs.length} 份文档、${formatNumber(totalChunks)} 个文本片段。回答会带上引用，点击 [n] 可以展开原文核对。</p>
-        <div class="suggestion-grid">
-          <button class="suggestion" type="button" data-prompt="LM358 的电源电压范围是多少？">LM358 的电源电压范围是多少？</button>
-          <button class="suggestion" type="button" data-prompt="个人信息保护法对处理个人信息有哪些要求？">个人信息保护法对处理个人信息有哪些要求？</button>
-          <button class="suggestion" type="button" data-prompt="BERT 的预训练任务是什么？">BERT 的预训练任务是什么？</button>
-          <button class="suggestion" type="button" data-prompt="明天杭州天气怎么样？">明天杭州天气怎么样？</button>
-        </div>
       </div>`;
     return;
   }
@@ -696,8 +690,11 @@ function renderSources() {
   }
 
   sourcesListEl.innerHTML = sources
-    .map(
-      (source) => `
+    .map((source) => {
+      const excerpt = source.kind === "table"
+        ? renderTableExcerpt(source.excerpt)
+        : `<p class="source-excerpt">${escapeHtml(source.excerpt)}</p>`;
+      return `
         <article class="source-card ${state.activeSource === source.n ? "active" : ""}" data-source="${source.n}" tabindex="0">
           <div class="source-top">
             <span class="source-index">${source.n}</span>
@@ -705,11 +702,66 @@ function renderSources() {
             <span class="source-score" title="相关度（越高越相关）">${Number(source.score).toFixed(3)}</span>
           </div>
           <div class="source-meta">${pageLabel(source.page)} · ${escapeHtml(source.meta)}</div>
-          <p class="source-excerpt">${escapeHtml(source.excerpt)}</p>
+          ${excerpt}
           <button class="source-expand" type="button" data-expand="${source.n}">展开原文</button>
-        </article>`
-    )
+        </article>`;
+    })
     .join("");
+}
+
+function splitTableRow(line) {
+  let text = String(line || "").trim();
+  if (text.startsWith("|")) text = text.slice(1);
+  if (text.endsWith("|")) text = text.slice(0, -1);
+  const cells = [];
+  let current = "";
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (char === "\\" && text[index + 1] === "|") {
+      current += "|";
+      index += 1;
+      continue;
+    }
+    if (char === "|") {
+      cells.push(current.trim());
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+  cells.push(current.trim());
+  return cells;
+}
+
+function renderTableCell(cell) {
+  // 先转义，再把 Markdown 表格里用于换行的 <br> 还原成真正的换行。
+  return escapeHtml(cell).replace(/&lt;br\s*\/?&gt;/gi, "<br>");
+}
+
+function renderTableExcerpt(markdown) {
+  const lines = String(markdown || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.startsWith("|"));
+  if (lines.length < 2) {
+    return `<p class="source-excerpt">${escapeHtml(markdown)}</p>`;
+  }
+
+  const isSeparator = (cells) =>
+    cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+  const rows = lines
+    .map(splitTableRow)
+    .filter((cells) => !isSeparator(cells));
+  if (!rows.length) {
+    return `<p class="source-excerpt">${escapeHtml(markdown)}</p>`;
+  }
+
+  const [header, ...body] = rows;
+  const head = header.map((cell) => `<th>${renderTableCell(cell)}</th>`).join("");
+  const bodyRows = body
+    .map((row) => `<tr>${row.map((cell) => `<td>${renderTableCell(cell)}</td>`).join("")}</tr>`)
+    .join("");
+  return `<div class="source-table-wrap"><table class="source-table"><thead><tr>${head}</tr></thead><tbody>${bodyRows}</tbody></table></div>`;
 }
 
 function pageLabel(page) {
@@ -796,6 +848,7 @@ function mapApiSource(source) {
     file: name,
     page: source.page,
     score: Number(source.score) || 0,
+    kind: source.kind || "text",
     meta: `${source.kind || "text"} · ${ext}`,
     excerpt: source.excerpt || "",
   };
@@ -841,9 +894,31 @@ function handleChatEvent(event, payload, assistant) {
   if (event === "done") {
     if (payload.session_id) state.sessionId = payload.session_id;
     if (typeof payload.answer === "string") assistant.text = payload.answer;
-    assistant.citations = parseAnswerCitations(assistant.text, assistant.sources);
-    assistant.insufficient = Boolean(payload.fallback) || assistant.sources.length === 0;
-    assistant.meta = chatMeta(payload, assistant.sources);
+    if (payload.chat_mode) {
+      // 问候/闲聊：服务端已确认不需要引用，清掉检索阶段先渲染出的来源卡片。
+      assistant.sources = [];
+      assistant.citations = [];
+      assistant.insufficient = false;
+      state.sources = [];
+      state.sourcesNote = "闲聊不需要知识库引用。";
+      state.activeSource = null;
+      assistant.meta = payload.timings
+        ? `闲聊 · 未使用知识库引用 · 完整回答 ${formatSeconds(payload.timings.total_ms)}s`
+        : "闲聊 · 未使用知识库引用";
+    } else if (payload.fallback) {
+      // 兜底答案没有有效引用；检索阶段先展示的片段不应继续冒充“引用来源”。
+      assistant.sources = [];
+      assistant.citations = [];
+      assistant.insufficient = true;
+      state.sources = [];
+      state.sourcesNote = "本轮未采用检索片段。";
+      state.activeSource = null;
+      assistant.meta = chatMeta(payload, []);
+    } else {
+      assistant.citations = parseAnswerCitations(assistant.text, assistant.sources);
+      assistant.insufficient = Boolean(payload.fallback) || assistant.sources.length === 0;
+      assistant.meta = chatMeta(payload, assistant.sources);
+    }
     finishStreaming(false);
     return;
   }
@@ -870,14 +945,22 @@ async function streamChatFromApi(question, assistant) {
     });
 
     if (!response.ok) {
-      let detail = "";
+      // 错误响应体只能读一次：先取文本，再尝试按 JSON 解析。
+      // 旧实现先 json() 再 text()，非 JSON 的 500 会二次读 body，
+      // 结果把真实错误掩盖成 “body stream already read”。
+      const raw = await response.text();
+      let detail = raw.trim();
       try {
-        const body = await response.json();
-        detail = body?.detail?.message || body?.detail || "";
+        const body = JSON.parse(raw);
+        detail =
+          body?.detail?.message ||
+          (typeof body?.detail === "string" ? body.detail : "") ||
+          body?.message ||
+          raw.trim();
       } catch {
-        detail = await response.text();
+        // 保留原始文本（例如代理返回的 HTML 错误页）
       }
-      throw new Error(`${response.status}${detail ? ` · ${detail}` : ""}`);
+      throw new Error(`${response.status}${detail ? ` · ${detail.slice(0, 300)}` : ""}`);
     }
     if (!response.body) throw new Error("浏览器不支持流式响应");
 
@@ -1550,8 +1633,6 @@ messagesEl.addEventListener("click", (event) => {
     selectSource(Number(citation.dataset.source));
     return;
   }
-  const suggestion = event.target.closest(".suggestion");
-  if (suggestion) sendMessage(suggestion.dataset.prompt);
 });
 
 sourcesListEl.addEventListener("click", (event) => {

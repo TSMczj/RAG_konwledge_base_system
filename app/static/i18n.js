@@ -1,7 +1,6 @@
 /* ============================================================
-   Prototype-only i18n layer (zh-CN / en)
-   说明：这是静态原型用的轻量翻译层，正式模板化时应改为服务端 i18n
-   或 data-i18n + 明确 key，不要把这个 DOM 遍历方案带进生产。
+   UI i18n layer (zh-CN / en)
+   说明：轻量 DOM 翻译层，覆盖聊天、文档、设置三页的静态文案。
    ============================================================ */
 
 (() => {
@@ -11,7 +10,6 @@
   const EN = {
     // Brand / navigation
     "RAG 知识库": "RAG Knowledge Base",
-    "UI 原型": "UI Prototype",
     "本地版": "Local",
     "万卷为门，开卷见天。": "Books are the gate; reading opens the sky.",
     "对话": "Chat",
@@ -41,7 +39,7 @@
     "尚未配置 API Key": "API keys not configured",
     "聊天需要 DeepSeek 与百炼嵌入 Key；配置后即可使用。": "Chat requires DeepSeek and DashScope embedding keys.",
     "去配置": "Configure",
-    "问点什么…… 例如：LM358 的电源电压范围是多少？": "Ask anything… e.g. What is the supply voltage of the LM358?",
+    "问点什么……": "Ask anything…",
     "Enter 发送 · Shift + Enter 换行": "Enter to send · Shift + Enter for a new line",
     "回答由本地知识库与 DeepSeek 生成，请核对引用原文。": "Answers are generated from your local knowledge base and DeepSeek. Verify the cited text.",
     "回答由本地知识库与所选模型生成，请核对引用原文。": "Answers are generated from your local knowledge base and the selected model. Verify the cited text.",
@@ -49,6 +47,10 @@
     "点击回答中的 [n] 或来源卡片可定位原文": "Click [n] in an answer or a source card to open the passage.",
     "回答后在这里查看引用来源。": "Sources will appear here after an answer.",
     "本轮没有找到可核对的引用。": "No verifiable sources in this answer.",
+    "闲聊不需要知识库引用。": "Small talk does not need knowledge-base citations.",
+    "本轮未采用检索片段。": "Retrieved passages were not used in this answer.",
+    "基于本地知识库回答，引用可以展开核对原文": "Answers come from the local knowledge base; expand citations to verify the text.",
+    "正在读取文档…": "Reading documents…",
     "正在检索知识库…": "Searching the knowledge base…",
     "正在生成回答…": "Generating answer…",
     "正在生成": "Generating",
@@ -81,10 +83,6 @@
     "BERT 使用两个预训练任务：掩码语言模型（Masked LM）随机遮住部分 token，让模型根据左右上下文预测；下一句预测（NSP）判断两个句子是否连续。论文还通过消融实验说明这两个任务对最终效果都有贡献。":
       "BERT uses two pre-training tasks: Masked LM randomly masks some tokens and asks the model to predict them from both sides of the context; Next Sentence Prediction (NSP) decides whether two sentences are consecutive. The paper also uses ablations to show that both tasks contribute to the final result.",
     "从你的知识库开始提问": "Ask your knowledge base",
-    "LM358 的电源电压范围是多少？": "What is the supply voltage range of the LM358?",
-    "个人信息保护法对处理个人信息有哪些要求？": "What does the Personal Information Protection Law require when processing personal data?",
-    "BERT 的预训练任务是什么？": "What are BERT's pre-training tasks?",
-    "明天杭州天气怎么样？": "What is the weather in Hangzhou tomorrow?",
     "当前没有可检索文档，先上传或恢复文档": "No searchable documents. Upload or restore a document first.",
 
     // Documents
@@ -183,13 +181,7 @@
     "请输入 API Key": "Enter an API key",
     "清除后，依赖这个 Key 的功能会立即停止工作；可以随时重新配置。":
       "Features that depend on this key will stop working immediately. You can configure it again at any time.",
-    "原型中只会清除当前页面的模拟状态，不会操作真实密钥。":
-      "In this prototype, only the mock state on this page is cleared; real keys are not touched.",
     "重新运行首次引导？": "Run setup again?",
-    "会清除当前模拟的 API Key 配置，并回到首次启动引导。":
-      "This clears the mock key configuration and returns to the first-run setup.",
-    "真实版本中，这不会删除你的真实 Key，除非你选择清除。":
-      "In the real app, this does not delete your real keys unless you choose to clear them.",
     "重新引导": "Run setup",
 
     // Setup
@@ -280,12 +272,10 @@
     "份已入库文档（共": "active documents (",
     "个文本片段）。": "passages total).",
     "开始重建": "Start rebuild",
-    "重建期间问答可能不可用；会重新消耗嵌入额度。原型中会模拟约 6 分钟。":
-      "Chat may be unavailable during the rebuild and embedding quota will be used again. The prototype simulates about 6 minutes.",
-    "会清空当前可检索索引，并重新解析、嵌入全部已入库文档。":
-      "This clears the searchable index and re-parses and re-embeds all active documents.",
-    "原型演示：这里模拟约 6 分钟的重建过程，不会真的调用嵌入接口。":
-      "Prototype: simulates about 6 minutes of rebuilding; no embedding API is called.",
+    "重建期间问答可能不可用；会重新消耗嵌入额度。":
+      "Chat may be unavailable during the rebuild; embedding quota will be used again.",
+    "正在清空并重新解析、嵌入全部已入库文档。":
+      "Clearing the index, then re-parsing and re-embedding all indexed documents.",
     "将删除": "Will delete",
     "的": "of",
     "个文本片段、对应向量，以及 data/uploads 中的原文件。":

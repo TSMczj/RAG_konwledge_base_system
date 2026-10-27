@@ -127,10 +127,19 @@ class Retriever:
 
         # Chroma 已按距离升序返回；这里再显式排序，避免未来换 adapter 改变顺序。
         items.sort(key=lambda item: item.score, reverse=True)
+
+        # 最低相似度阈值：低于阈值的片段不进入上下文。
+        # 问候/闲聊通常只有 0.1~0.2，过滤后上下文为空，再交给提示词第 7 条。
+        min_score = float(getattr(self._settings, "min_score", 0.0) or 0.0)
+        before = len(items)
+        if min_score > 0:
+            items = [item for item in items if item.score >= min_score]
+        dropped = before - len(items)
+
         result = RetrievalResult(query=query, items=tuple(items), elapsed_ms=elapsed_ms)
         logger.debug(
-            "检索完成: k={} 命中={} 耗时={:.1f}ms",
-            limit, len(result), elapsed_ms,
+            "检索完成: k={} 命中={} 过滤={}（阈值 {:.2f}）耗时={:.1f}ms",
+            limit, len(result), dropped, min_score, elapsed_ms,
         )
         return result
 

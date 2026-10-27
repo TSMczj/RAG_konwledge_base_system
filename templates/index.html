@@ -34,7 +34,7 @@
         <div class="index-pill" title="当前本地索引状态">
           <span class="dot"></span>
           <span>索引就绪</span>
-          <strong id="topChunkCount">4,021</strong>
+          <strong id="topChunkCount">—</strong>
           <span>文本片段</span>
         </div>
         <button class="lang-button" id="langButton" type="button" title="切换到 English" aria-label="切换到 English">EN</button>
@@ -61,7 +61,7 @@
               <div class="chat-heading">
                 <span class="eyebrow">CHAT</span>
                 <h2>知识库对话</h2>
-                <p id="chatSubtitle">基于 10 份文档回答，引用可以展开核对原文</p>
+                <p id="chatSubtitle">基于本地知识库回答，引用可以展开核对原文</p>
               </div>
               <div class="chat-head-actions">
                 <button class="soft-button mobile-sources" id="sourcesToggle" type="button">
@@ -90,7 +90,7 @@
                   </select>
                   <span class="model-hint" id="modelHint">当前回答使用 DeepSeek V4 Flash</span>
                 </div>
-                <textarea id="questionInput" rows="1" placeholder="问点什么…… 例如：LM358 的电源电压范围是多少？" aria-label="输入问题"></textarea>
+                <textarea id="questionInput" rows="1" placeholder="问点什么……" aria-label="输入问题"></textarea>
                 <div class="composer-actions">
                   <span class="composer-hint">Enter 发送 · Shift + Enter 换行</span>
                   <button class="send-button" id="sendButton" type="button" aria-label="发送问题">
@@ -150,7 +150,7 @@
             </article>
             <article class="stat-card">
               <span class="stat-icon teal">◈</span>
-              <div><strong id="statChunks">4,021</strong><span>可检索文本片段</span></div>
+              <div><strong id="statChunks">—</strong><span>可检索文本片段</span></div>
             </article>
             <article class="stat-card">
               <span class="stat-icon amber">◒</span>
@@ -226,7 +226,7 @@
               </table>
             </div>
             <div class="docs-footer">
-              <span id="docsFooter">共 10 个文件，4,021 个文本片段</span>
+              <span id="docsFooter">正在读取文档…</span>
               <span class="muted">删除文档会同时移除它的全部文本片段</span>
             </div>
           </section>

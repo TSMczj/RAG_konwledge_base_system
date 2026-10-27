@@ -4,7 +4,7 @@
 ----
 - 检索 Top-K；
 - 构造带编号上下文的提示词；
-- 没有可用上下文时返回固定兜底话术，不调用 LLM；
+- 没有可用上下文时仍调用 LLM：问候/闲聊需要暖心回应，知识问题没有有效引用时再兜底；
 - 生成后解析回答中的 ``[n]``，映射到实际来源；
 - 为 T-4.6 CLI / T-5.4 SSE 提供稳定的 ``QAResult``。
 """
@@ -24,7 +24,23 @@ from app.core.retriever import RetrievalResult, RetrievedChunk, Retriever
 #: 没有检索到可用上下文时的固定话术（T-4.5 验收要求）
 NO_ANSWER = "知识库中没有相关信息。"
 
+#: 闲聊/问候回答的内部标记；模型按系统提示词第 8 条输出，服务端负责剥掉。
+CHAT_MARKER = "[[CHAT]]"
+
 _CITATION_RE = re.compile(r"\[(\d+)\]")
+
+
+def extract_chat_mode(answer: str) -> tuple[str, bool]:
+    """剥离闲聊标记，返回 ``(正文, 是否闲聊)``。
+
+    闲聊回答按产品要求不带引用；但“无引用”原本会被统一替换成
+    ``NO_ANSWER``。用一个显式标记区分“模型主动闲聊”和“知识回答漏了引用”，
+    避免把暖心问候又变成“知识库中没有相关信息”。
+    """
+    text = str(answer or "")
+    if CHAT_MARKER not in text:
+        return text.strip(), False
+    return text.replace(CHAT_MARKER, "").strip(), True
 
 
 @dataclass(frozen=True, slots=True)
@@ -64,6 +80,7 @@ class QAResult:
     llm: LLMResult | None
     elapsed_ms: float
     no_context: bool = False
+    chat_mode: bool = False
 
 
 def parse_citations(answer: str, sources: tuple[RetrievedChunk, ...]) -> tuple[Citation, ...]:
@@ -144,8 +161,8 @@ class QAService:
             k: 检索条数；缺省用配置。
 
         Returns:
-            ``QAResult``；没有可用上下文时 ``no_context=True``、``answer=NO_ANSWER``，
-            且不会调用 LLM。
+            ``QAResult``；没有可用上下文或没有有效引用时 ``no_context=True``、
+            ``answer=NO_ANSWER``；问候/闲聊由 ``chat_mode=True`` 标记，保留无引用回答。
         """
         query = str(question or "").strip()
         if not query:
@@ -160,26 +177,28 @@ class QAService:
             history=history,
         )
 
-        if not prompt.used_sources:
-            return QAResult(
-                question=query,
-                answer=NO_ANSWER,
-                citations=(),
-                retrieval=retrieval,
-                prompt=prompt,
-                llm=None,
-                elapsed_ms=(perf_counter() - started) * 1000,
-                no_context=True,
-            )
-
         llm_result = self._llm.complete(
             prompt.messages,
             temperature=self._settings.temperature,
         )
-        answer = llm_result.text.strip()
+        answer, chat_mode = extract_chat_mode(llm_result.text)
         if not answer:
             # 空正文通常是上游异常/被截断；不伪装成“知识库无信息”。
             raise RuntimeError("模型返回了空回答")
+
+        if chat_mode:
+            # 问候/闲聊：产品要求暖心回应且不标引用，不能走“无引用”兜底。
+            return QAResult(
+                question=query,
+                answer=answer,
+                citations=(),
+                retrieval=retrieval,
+                prompt=prompt,
+                llm=llm_result,
+                elapsed_ms=(perf_counter() - started) * 1000,
+                no_context=False,
+                chat_mode=True,
+            )
 
         citations = parse_citations(answer, prompt.used_sources)
         if not citations:
@@ -208,4 +227,12 @@ class QAService:
         )
 
 
-__all__ = ["Citation", "NO_ANSWER", "QAResult", "QAService", "parse_citations"]
+__all__ = [
+    "CHAT_MARKER",
+    "Citation",
+    "NO_ANSWER",
+    "QAResult",
+    "QAService",
+    "extract_chat_mode",
+    "parse_citations",
+]

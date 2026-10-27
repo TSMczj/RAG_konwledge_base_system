@@ -136,3 +136,20 @@ def test_context_tenant_is_used_when_metadata_missing() -> None:
     item = retriever.retrieve("问题", k=1).items[0]
 
     assert item.tenant_id == "tenant-a"
+
+
+def test_low_score_chunks_are_filtered() -> None:
+    store = FakeStore([
+        (_doc("keep.pdf", 1, "相关"), 0.10),   # score 0.90
+        (_doc("drop.pdf", 1, "弱相关"), 0.85),  # score 0.15
+        (_doc("noise.pdf", 1, "无关"), 0.95),  # score 0.05
+    ])
+    retriever = Retriever(
+        store=store,
+        settings=SimpleNamespace(top_k=5, min_score=0.25),
+    )
+
+    result = retriever.retrieve("问题", k=3)
+
+    assert [item.file_name for item in result.items] == ["keep.pdf"]
+    assert result.items[0].score == 0.9

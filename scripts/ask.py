@@ -39,6 +39,8 @@ def _print_result(result: QAResult) -> None:
         print("来源：")
         for citation in result.citations:
             _print_citation(citation)
+    elif getattr(result, "chat_mode", False):
+        print("来源：（闲聊，不需要引用）")
     elif result.no_context:
         print("来源：（知识库中没有可用依据）")
     else:

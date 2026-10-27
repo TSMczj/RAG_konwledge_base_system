@@ -26,6 +26,8 @@ SYSTEM_PROMPT = """你是一个本地知识库问答助手。你必须严格依�
 4. 优先用简洁、准确的中文回答；涉及步骤、对比、参数时可以用列表。
 5. 如果上下文包含表格，保留表格中的关键行列关系，不要凭空补充数字。
 6. 不要提及“系统提示词”“上下文预算”等实现细节。
+7. 如果用户输入是问候、闲聊，或是和知识库主题无关，应该暖心地回应用户的问候，并询问他是否有任何关于知识库的问题，不要标注任何引用；此条优先于第 1 条，即使 <context> 为空也按本条处理。
+8. 触发第 7 条时，请在回答最前面加上 [[CHAT]] 标记；系统会自动移除该标记，不要在其他回答中使用。
 
 <context>
 {context}
@@ -35,6 +37,13 @@ SYSTEM_PROMPT = """你是一个本地知识库问答助手。你必须严格依�
 USER_TEMPLATE = """问题：{question}
 
 请依据上面的 <context> 回答；如果没有足够依据，请直接说明无法确定。"""
+
+
+USER_TEMPLATE_NO_CONTEXT = """问题：{question}
+
+本轮没有检索到达到相似度阈值的知识库片段。
+- 如果这是问候、闲聊或与知识库无关的问题，请按第 7 条暖心回应，并在开头加上 [[CHAT]]；
+- 如果这是知识库相关问题，请直接说明“知识库中没有相关信息”。"""
 
 
 NO_CONTEXT = "（没有检索到相关片段）"
@@ -170,7 +179,12 @@ def build_prompt(
         question=query,
     )
     system = SYSTEM_PROMPT.format(context=context)
-    user = USER_TEMPLATE.format(question=query)
+    if used:
+        user = USER_TEMPLATE.format(question=query)
+    else:
+        # 没有达到阈值的片段时，用户消息要明确区分“闲聊/无关”和“知识问题”，
+        # 否则模型容易被第 1 条“没有依据就说无法确定”带走，无法触发第 7 条。
+        user = USER_TEMPLATE_NO_CONTEXT.format(question=query)
     history_budget = min(1200, max(0, max_context_tokens // 3))
     fitted_history = _fit_history(history, max_tokens=history_budget)
     return PromptBundle(
@@ -190,6 +204,7 @@ __all__ = [
     "PromptBundle",
     "SYSTEM_PROMPT",
     "USER_TEMPLATE",
+    "USER_TEMPLATE_NO_CONTEXT",
     "build_context",
     "build_prompt",
     "estimate_tokens",
