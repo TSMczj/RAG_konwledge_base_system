@@ -13,6 +13,8 @@ from threading import Lock
 from typing import Callable
 from uuid import uuid4
 
+from app.logging_config import logger
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -82,10 +84,25 @@ class JobManager:
         self._executor.submit(self._run, job_id, fn)
 
     def _run(self, job_id: str, fn: Callable[[str], None]) -> None:
+        """执行任务并把结果落到 job 表。
+
+        任务失败以前只写 job.error，不写日志；重建失败时前端只看到一句
+        “重建索引失败”，服务端没有任何堆栈，无法定位。这里补上开始/失败日志。
+        """
+        job = self.get(job_id) or {}
+        logger.info(
+            "任务开始: {} kind={} file={}",
+            job_id, job.get("kind", ""), job.get("file_name", ""),
+        )
         try:
             self.update(job_id, state="running", stage="准备中", percent=1)
             fn(job_id)
         except Exception as exc:  # noqa: BLE001 —— 任务失败要落到 job
+            logger.opt(exception=exc).error(
+                "任务失败: {} kind={} file={} error={}",
+                job_id, job.get("kind", ""), job.get("file_name", ""),
+                type(exc).__name__,
+            )
             self.update(
                 job_id,
                 state="failed",
@@ -93,6 +110,13 @@ class JobManager:
                 percent=0,
                 error=f"{type(exc).__name__}: {exc}",
                 message="任务失败",
+            )
+        else:
+            finished = self.get(job_id) or {}
+            logger.info(
+                "任务结束: {} kind={} state={} message={}",
+                job_id, finished.get("kind", ""), finished.get("state", ""),
+                finished.get("message", ""),
             )
 
     def shutdown(self) -> None:

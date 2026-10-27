@@ -6,13 +6,16 @@ API 层只做 HTTP 映射；索引任务由 :mod:`app.services.jobs` 串行执�
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Callable
+from uuid import uuid4
 
 from app.config import Settings, get_settings
-from app.core.loader import load_document
-from app.core.splitter import split_document
+from app.core.loader import compute_file_hash, load_document
+from app.core.splitter import Chunk, split_document
 from app.core.vectorstore import IndexedFile, VectorStore
+from app.logging_config import logger
 from app.services.jobs import JobManager, job_manager
 
 ALLOWED_SUFFIXES = {".pdf", ".docx", ".txt"}
@@ -60,7 +63,13 @@ class DocumentService:
 
         self._settings.ensure_directories()
         target = self._settings.upload_dir / safe_name
-        target.write_bytes(data)
+        # 先写临时文件再原子替换：写盘失败时旧文件仍可用，不会留下半个文档。
+        temp = target.with_name(f".upload-{uuid4().hex}.tmp")
+        try:
+            temp.write_bytes(data)
+            os.replace(temp, target)
+        finally:
+            temp.unlink(missing_ok=True)
         return target
 
     def _file_to_dict(self, item: IndexedFile) -> dict:
@@ -168,8 +177,27 @@ class DocumentService:
             "file_deleted": file_deleted,
         }
 
+    def _drop_replaced_versions(
+        self,
+        store: VectorStore,
+        source_file: str,
+        keep_hash: str,
+    ) -> int:
+        """同名文件被新内容替换后，删除旧版本的向量（不动磁盘文件）。"""
+        removed = 0
+        for item in store.list_files():
+            if (
+                item.source_file == source_file
+                and item.file_hash
+                and item.file_hash != keep_hash
+            ):
+                removed += store.delete_by_file_hash(item.file_hash)
+        if removed:
+            logger.info("同名文件替换: {} -> 清理旧向量 {} 个 chunk", source_file, removed)
+        return removed
+
     def index_file(self, path: Path, job_id: str) -> None:
-        """单个文件的后台索引任务。"""
+        """单个文件的后台索引任务；同名文件按“替换旧版本”处理。"""
         store = self._open_store()
         try:
             self._jobs.update(
@@ -206,6 +234,10 @@ class DocumentService:
                 message="正在生成向量",
             )
             result = store.index_chunks(chunks)
+            replaced = self._drop_replaced_versions(store, path.name, document.file_hash)
+            message = "文件已存在，跳过" if result.skipped else f"已写入 {result.indexed} 个 chunk"
+            if replaced:
+                message += f"；替换旧版本 {replaced} 个 chunk"
             self._jobs.update(
                 job_id,
                 state="skipped" if result.skipped else "ready",
@@ -214,52 +246,138 @@ class DocumentService:
                 document_id=document.file_hash,
                 current=len(chunks),
                 total=len(chunks),
-                message="文件已存在，跳过" if result.skipped else f"已写入 {result.indexed} 个 chunk",
+                message=message,
             )
         finally:
             store.close()
 
     def rebuild(self, job_id: str) -> None:
-        """全量重建：保留已移出文件，不重新激活它们。"""
+        """全量重建：先把全部文档解析、分块、嵌入完成，最后才替换索引。
+
+        旧实现是「先 ``delete_all()``，再逐个文件重建」。只要中间任何一个文件
+        解析或嵌入失败，知识库就已经被清空，而且下次重建会拿残缺的索引判断
+        「哪些文件已移出」，导致磁盘上还在的文档被永久跳过（V1 调试中实际发生）。
+
+        现在的顺序：
+        1. 从当前索引读出「已移出」的文件哈希（软删除的文件不重新激活）；
+        2. 解析 + 分块磁盘上的全部文件；任何文件失败就中止，**旧索引保持不动**；
+        3. 全部 chunk 的向量算完后，才调用 :meth:`VectorStore.replace_all`。
+
+        Args:
+            job_id: 任务 id，用于写进度。
+
+        Raises:
+            DocumentError: 有文件无法解析/分块，或没有可重建内容；此时索引不变。
+        """
+        self._settings.ensure_directories()
         store = self._open_store()
         try:
             files = store.list_files()
-            active_hashes = {item.file_hash for item in files if item.active}
-            store.delete_all()
+            removed_hashes = {item.file_hash for item in files if not item.active}
+            # 软删除文档的向量不参与检索，但“恢复”依赖它们；重建时保留，
+            # 否则界面上的“恢复”会因为 id 已被清掉而变成 404。
+            preserved_ids: list[str] = []
+            for file_hash in removed_hashes:
+                preserved_ids.extend(store.ids_by_file_hash(file_hash))
 
             candidates = sorted(
                 path for path in self._settings.upload_dir.iterdir()
                 if path.is_file() and path.suffix.lower() in ALLOWED_SUFFIXES
             )
-            total = len(candidates) or 1
+            total = len(candidates)
             self._jobs.update(
                 job_id,
                 state="parsing",
                 percent=5,
-                stage="重建中",
+                stage="解析中",
                 total=total,
                 unit="file",
-                message="已清空索引，开始重建",
+                current=0,
+                message="正在解析文档，完成后才会替换索引",
             )
 
+            chunks: list[Chunk] = []
+            failures: list[str] = []
+            skipped: list[str] = []
+
             for index, path in enumerate(candidates, start=1):
+                try:
+                    file_hash = compute_file_hash(path)
+                except OSError as exc:
+                    failures.append(f"{path.name}: 计算哈希失败 {exc}")
+                    continue
+
+                if file_hash in removed_hashes:
+                    # 软删除的文档保留在磁盘上，但重建不应把它重新激活。
+                    skipped.append(path.name)
+                    self._jobs.update(
+                        job_id,
+                        current=index,
+                        percent=5 + int(35 * index / max(total, 1)),
+                        message=f"跳过已移出：{path.name}",
+                    )
+                    continue
+
                 document = load_document(path)
                 if not document.ok:
+                    failures.append(f"{path.name}: {document.error or '解析失败'}")
                     continue
-                if document.file_hash not in active_hashes:
-                    self._jobs.update(job_id, current=index, message=f"跳过已移出：{path.name}")
+
+                file_chunks = split_document(document, settings=self._settings)
+                if not file_chunks:
+                    failures.append(f"{path.name}: 没有可入库文本")
                     continue
-                chunks = split_document(document, settings=self._settings)
-                if not chunks:
-                    continue
-                store.index_chunks(chunks)
+
+                chunks.extend(file_chunks)
                 self._jobs.update(
                     job_id,
                     current=index,
-                    percent=5 + int(90 * index / total),
-                    stage="重建中",
-                    message=f"已重建 {path.name}",
+                    percent=5 + int(35 * index / max(total, 1)),
+                    message=f"已解析 {path.name}",
                 )
+
+            if failures:
+                # 先失败先中止：此时还没有写入任何向量，旧索引仍可正常问答。
+                detail = "；".join(failures[:5])
+                if len(failures) > 5:
+                    detail += f"；等共 {len(failures)} 个文件"
+                raise DocumentError(f"重建中止，索引未改动：{detail}")
+
+            if not chunks:
+                self._jobs.update(
+                    job_id,
+                    state="ready",
+                    percent=100,
+                    stage="完成",
+                    current=len(candidates),
+                    total=total,
+                    unit="file",
+                    message=f"没有可重建的文档（跳过 {len(skipped)} 个已移出文件），索引保持不变",
+                )
+                return
+
+            self._jobs.update(
+                job_id,
+                state="embedding",
+                percent=40,
+                stage="嵌入中",
+                total=len(chunks),
+                unit="chunk",
+                current=0,
+                message=f"正在嵌入 {len(chunks)} 个 chunk（失败则索引不变）",
+            )
+            vectors = store.embed_documents([chunk.text for chunk in chunks])
+
+            self._jobs.update(
+                job_id,
+                state="writing",
+                percent=80,
+                stage="写入中",
+                message="向量已全部生成，正在替换索引",
+            )
+            written = store.replace_all(
+                chunks, vectors, preserve_ids=preserved_ids
+            )
 
             self._jobs.update(
                 job_id,
@@ -267,8 +385,12 @@ class DocumentService:
                 percent=100,
                 stage="完成",
                 current=len(candidates),
-                total=len(candidates),
-                message="索引重建完成",
+                total=total,
+                unit="file",
+                message=(
+                    f"索引重建完成：{written} 个 chunk"
+                    f"（跳过 {len(skipped)} 个已移出文件，保留 {len(preserved_ids)} 个已移出 chunk）"
+                ),
             )
         finally:
             store.close()

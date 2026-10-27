@@ -684,6 +684,10 @@ _TABLE_MIN_CELLS = 4            # 至少要有 4 个非空单元格
 _TABLE_MAX_COLS = 32            # 超过 32 列基本是注意力可视化图/多栏排版，不是表格
 _TABLE_WIDE_COLS = 20           # 超过 20 列的宽表再用「数字占比」二次判断
 _TABLE_WIDE_MIN_NUMERIC = 0.15  # 宽表里数字占比低于 15% → 判为假表
+_TABLE_MIN_FILL = 0.30          # 非空单元格占比低于 30% → 稀疏版式框
+_TABLE_MIN_POPULATED_ROWS = 2   # 3 行以上的表，至少要有 2 行含 2 个以上非空单元格
+#: 论文结构图里常见的特殊 token；真实表格几乎不会把这些当成单元格数据
+_TABLE_DIAGRAM_TOKENS = ("[CLS]", "[SEP]", "[MASK]", "[PAD]")
 _TABLE_OVERLAP_THRESHOLD = 0.5  # 文本块与表格重叠超过一半才剔除，避免误删相邻段落
 
 #: pdfplumber 的表格 bbox：(x0, top, x1, bottom)，单位是 PDF 点
@@ -743,10 +747,15 @@ def _table_to_markdown(rows: list[list[str | None]]) -> str:
 
 
 def _is_useful_table(rows: list[list[str | None]]) -> bool:
-    """过滤版式框、注意力可视化图等假表格，避免污染检索。
+    """过滤版式框、注意力可视化图、论文结构图等假表格。
 
-    pdfplumber 只按线条找表格；论文里的注意力可视化图、多栏排版也可能
-    被切成 40+ 列的“表格”。这里用列数与宽表数字占比兜底。
+    pdfplumber 只按线条找表格；论文里的注意力可视化图、多栏排版、模型
+    结构图也可能被切成“表格”。这里用四层兜底：
+
+    1. 行列数、非空单元格数；
+    2. 非空单元格占比（结构图大量留白）；
+    3. 3 行以上的表至少要有 2 行“有效行”（结构图通常只有表头一行有内容）；
+    4. 特殊 token（[CLS]/[SEP]/[MASK]/[PAD]）——它们更像图内标签而不是表格数据。
     """
     if len(rows) < _TABLE_MIN_ROWS:
         return False
@@ -762,6 +771,26 @@ def _is_useful_table(rows: list[list[str | None]]) -> bool:
         if cell and str(cell).strip()
     ]
     if len(cells) < _TABLE_MIN_CELLS:
+        return False
+
+    total_cells = len(rows) * width
+    if total_cells and len(cells) / total_cells < _TABLE_MIN_FILL:
+        return False
+
+    if len(rows) >= 3:
+        populated_rows = sum(
+            1
+            for row in rows
+            if sum(1 for cell in row if cell and str(cell).strip()) >= 2
+        )
+        if populated_rows < _TABLE_MIN_POPULATED_ROWS:
+            return False
+
+    if any(
+        token in cell
+        for cell in cells
+        for token in _TABLE_DIAGRAM_TOKENS
+    ):
         return False
 
     # 宽表（财报常见 20+ 列）用数字占比二次判断：

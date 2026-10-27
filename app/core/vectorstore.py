@@ -395,6 +395,80 @@ class VectorStore:
         logger.info("向量入库: {} 个 chunk（累计 {}）", len(items), self.count())
         return len(items)
 
+    def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
+        """只计算向量，不写库。
+
+        全量重建先用它把全部向量算完：嵌入失败时旧索引完全不动，
+        调用方确认全部成功后再 :meth:`replace_all`。
+        """
+        return self._embeddings.embed_documents(list(texts))
+
+    def ids_by_file_hash(self, file_hash: str) -> list[str]:
+        """取某个文件（内容哈希）当前的全部向量 id。"""
+        return self._ids_where({"file_hash": file_hash})
+
+    def replace_all(
+        self,
+        chunks: Iterable[Chunk],
+        embeddings: Sequence[Sequence[float]],
+        *,
+        preserve_ids: Sequence[str] = (),
+    ) -> int:
+        """用一批已算好向量的 chunk 全量替换 collection，返回写入条数。
+
+        与 ``delete_all() + upsert`` 的区别：
+
+        - **先写后删**：先把新 chunk upsert 进去，再删除旧集合里多出来的 id；
+          写入中途失败时旧数据仍在，不会出现"库被清空但新数据没写进去"。
+        - 向量由调用方传入，本方法不再调用嵌入接口；全量重建可以先完成全部
+          嵌入，确认无误后再落库。
+        - ``preserve_ids`` 用于保留软删除文档的旧向量：它们不参与检索，
+          但用户仍可“恢复”，重建不应把它们当成垃圾清掉。
+
+        Args:
+            chunks: 新集合的全部 chunk，``chunk_id`` 必须唯一。
+            embeddings: 与 ``chunks`` 等长、顺序一致的向量。
+            preserve_ids: 需要保留、不参与本次替换的旧向量 id。
+
+        Raises:
+            ValueError: 条数不一致，或 chunk_id 重复。
+        """
+        items = list(chunks)
+        vectors = list(embeddings)
+        if len(items) != len(vectors):
+            raise ValueError(
+                f"chunk 与向量条数不一致: {len(items)} != {len(vectors)}"
+            )
+        if not items:
+            return 0
+
+        ids = [chunk.chunk_id for chunk in items]
+        if len(set(ids)) != len(ids):
+            raise ValueError("replace_all 收到重复的 chunk_id")
+
+        # 先取旧 id 集合，再分批 upsert；最后只删本次不再出现、且未被要求保留的旧 id。
+        existing_ids = set(self._collection.get(include=[]).get("ids") or [])
+        preserved = set(preserve_ids)
+        batch_size = 500
+        for start in range(0, len(items), batch_size):
+            batch = items[start:start + batch_size]
+            self._collection.upsert(
+                ids=[chunk.chunk_id for chunk in batch],
+                embeddings=vectors[start:start + batch_size],
+                documents=[chunk.text for chunk in batch],
+                metadatas=[chunk.to_metadata() for chunk in batch],
+            )
+
+        stale_ids = sorted(existing_ids.difference(ids).difference(preserved))
+        if stale_ids:
+            self._collection.delete(ids=stale_ids)
+
+        logger.info(
+            "全量替换完成: 写入 {} 个 chunk，保留旧 chunk {} 个，清理旧 chunk {} 个（累计 {}）",
+            len(items), len(preserved), len(stale_ids), self.count(),
+        )
+        return len(items)
+
     def add_chunks(self, chunks: Iterable[Chunk]) -> int:
         """``upsert_chunks`` 的别名，便于按“添加”语义调用。"""
         return self.upsert_chunks(chunks)

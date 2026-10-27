@@ -9,8 +9,10 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -21,7 +23,7 @@ from app.api.health import router as health_router
 from app.api.index import router as index_router
 from app.api.settings import router as settings_router
 from app.config import PROJECT_ROOT
-from app.logging_config import setup_logging
+from app.logging_config import logger, setup_logging
 
 TEMPLATES_DIR = PROJECT_ROOT / "templates"
 STATIC_DIR = PROJECT_ROOT / "app" / "static"
@@ -45,6 +47,31 @@ def create_app() -> FastAPI:
     app.include_router(documents_router, prefix="/api/v1")
     app.include_router(index_router, prefix="/api/v1")
     app.include_router(settings_router, prefix="/api/v1")
+
+    @app.exception_handler(Exception)
+    async def unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
+        """把未处理异常收敛成契约里的 JSON 错误，并留下可排查的 request_id。
+
+        没有这层时，Starlette 会返回纯文本 ``Internal Server Error``；
+        前端按 JSON 解析会失败，真实原因完全看不到（V1 调试中实际踩到）。
+        本应用只监听回环地址，错误消息里带异常类型与原文，便于本机定位；
+        服务器化时应改为只返回 request_id，详细信息只进日志。
+        """
+        request_id = f"req_{uuid4().hex[:16]}"
+        logger.opt(exception=exc).error(
+            "未处理异常 [{}] {} {}: {}",
+            request_id, request.method, request.url.path, type(exc).__name__,
+        )
+        return JSONResponse(
+            status_code=500,
+            content={
+                "code": "INTERNAL",
+                "message": f"{type(exc).__name__}: {exc}",
+                "detail": None,
+                "retryable": False,
+                "request_id": request_id,
+            },
+        )
 
     if STATIC_DIR.exists():
         app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")

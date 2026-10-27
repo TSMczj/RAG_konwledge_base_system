@@ -44,6 +44,44 @@ def test_small_sparse_real_table_is_kept() -> None:
     assert _is_useful_table(rows)
 
 
+def test_figure_fragments_with_special_tokens_are_rejected() -> None:
+    # BERT 第 15 页结构图：表头有 [SEP]，下面是图内 token
+    rows = [
+        ["C", "T ...\n1", "T T\nN [SEP]"],
+        ["BERT", None, None],
+        ["E[CLS]", "E ...\n1", None],
+    ]
+    assert not _is_useful_table(rows)
+
+
+def test_sparse_three_row_figure_is_rejected() -> None:
+    # 只有表头一行有效，其余行几乎为空
+    rows = [
+        ["T T\n1 2", "...", "T\nN"],
+        ["BERT", None, None],
+        ["E E\n1 2", None, None],
+    ]
+    assert not _is_useful_table(rows)
+
+
+def test_sparse_low_fill_table_is_rejected() -> None:
+    rows = [
+        ["a", "b", "", "", "", "", "", "", "", ""],
+        ["c", "d", "", "", "", "", "", "", "", ""],
+        ["e", "f", "", "", "", "", "", "", "", ""],
+    ]
+    assert not _is_useful_table(rows)
+
+
+def test_dense_small_table_is_kept() -> None:
+    rows = [
+        ["型号", "电压", "电流"],
+        ["LM358", "3-36V", "1mA"],
+        ["LM2904", "3-30V", "1mA"],
+    ]
+    assert _is_useful_table(rows)
+
+
 def test_too_few_rows_or_columns_are_rejected() -> None:
     assert not _is_useful_table([["a", "b", "c"]])
     assert not _is_useful_table([["a"], ["b"], ["c"]])
