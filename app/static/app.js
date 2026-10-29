@@ -110,6 +110,10 @@ function bothKeysConfigured() {
   return Boolean(state.keys.dashscope.configured && state.keys[provider]?.configured);
 }
 
+function setupKeysConfigured() {
+  return Boolean(state.keys.deepseek.configured && state.keys.dashscope.configured);
+}
+
 function missingKeyText() {
   const missing = [];
   if (!state.keys.deepseek.configured) missing.push("DeepSeek");
@@ -395,8 +399,8 @@ function showKeyError(title, message) {
 function setupProgress(step) {
   return `
     <div class="setup-progress" aria-label="配置进度">
-      ${[1, 2, 3, 4].map((item) => `<span class="${item <= step ? "done" : ""} ${item === step ? "current" : ""}">${item}</span>`).join("")}
-      <em>第 ${step} / 4 步</em>
+      ${[1, 2].map((item) => `<span class="${item <= step ? "done" : ""} ${item === step ? "current" : ""}">${item}</span>`).join("")}
+      <em>第 ${step} / 2 步</em>
     </div>`;
 }
 
@@ -406,10 +410,12 @@ function renderSetup() {
   const step = state.setupStep;
 
   if (step === 1) {
+    const chatConfigured = Boolean(state.keys.deepseek?.configured);
+    const embedConfigured = Boolean(state.keys.dashscope?.configured);
     card.innerHTML = `
       <div class="setup-intro">
         <div class="setup-hero-window" aria-hidden="true">
-          <span class="setup-window-caption">LOCAL ARCHIVE</span>
+          <img class="setup-hero-logo" src="/static/assets/logo-mark.svg" alt="">
         </div>
         <div class="setup-motto-block">
           <span class="eyebrow">WELCOME</span>
@@ -420,19 +426,97 @@ function renderSetup() {
         </div>
       </div>
       <div class="setup-key-head">
+        <span class="eyebrow">STEP 1</span>
         <h2>配置模型 api-key</h2>
         <p class="setup-lead">这个知识库需要两个 Key 才能完成问答。它们只保存在本机，不会上传到我们的服务器。</p>
       </div>
-      <ul class="setup-points">
-        <li><strong>DeepSeek</strong><span>负责生成最终回答</span></li>
-        <li><strong>阿里云百炼</strong><span>负责把文档和问题变成向量</span></li>
-      </ul>
+
+      <section class="setup-provider-section" aria-labelledby="setupChatTitle">
+        <h3 id="setupChatTitle">问答模型 Key</h3>
+        <label class="setup-field" for="setupChatProvider">Provider
+          <select id="setupChatProvider">
+            <option value="deepseek">DeepSeek</option>
+          </select>
+        </label>
+        ${chatConfigured ? `<div class="setup-existing">已配置：<code>${escapeHtml(state.keys.deepseek.masked)}</code>，留空则保留当前 Key。</div>` : ""}
+        <label class="setup-field" for="setupChatKey">DeepSeek API Key
+          <input id="setupChatKey" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 DeepSeek API Key">
+        </label>
+      </section>
+
+      <section class="setup-provider-section" aria-labelledby="setupEmbedTitle">
+        <h3 id="setupEmbedTitle">嵌入模型 Key</h3>
+        <label class="setup-field" for="setupEmbedProvider">Provider
+          <select id="setupEmbedProvider">
+            <option value="dashscope">阿里云百炼</option>
+          </select>
+        </label>
+        ${embedConfigured ? `<div class="setup-existing">已配置：<code>${escapeHtml(state.keys.dashscope.masked)}</code>，留空则保留当前 Key。</div>` : ""}
+        <label class="setup-field" for="setupEmbedKey">阿里云百炼 API Key
+          <input id="setupEmbedKey" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 阿里云百炼 API Key">
+        </label>
+      </section>
+
+      <div class="setup-error" id="setupError" hidden></div>
       <div class="setup-note">保存后只显示末 4 位，例如 <code>sk-••••••••••••••••••4f2a</code>；不会显示完整内容。</div>
       <div class="setup-actions">
-        <button class="primary-button" id="setupStart" type="button">开始配置</button>
+        <button class="primary-button" id="setupNext" type="button">保存并继续</button>
         <button class="soft-button" id="setupSkip" type="button">跳过，先只读浏览</button>
       </div>`;
-    $("#setupStart").addEventListener("click", () => {
+    $("#setupNext").addEventListener("click", async () => {
+      const chatInput = $("#setupChatKey");
+      const embedInput = $("#setupEmbedKey");
+      const chatValue = chatInput ? chatInput.value.trim() : "";
+      const embedValue = embedInput ? embedInput.value.trim() : "";
+      const button = $("#setupNext");
+      const errorBox = $("#setupError");
+      const showError = (message) => {
+        if (errorBox) {
+          errorBox.textContent = message;
+          errorBox.hidden = false;
+        }
+      };
+
+      if (!chatValue && !chatConfigured) {
+        showError("请填写 DeepSeek API Key。");
+        return;
+      }
+      if (!embedValue && !embedConfigured) {
+        showError("请填写阿里云百炼 API Key。");
+        return;
+      }
+
+      if (!chatValue && !embedValue) {
+        state.setupStep = 2;
+        renderSetup();
+        return;
+      }
+
+      if (button) {
+        button.disabled = true;
+        button.textContent = "保存中…";
+      }
+      try {
+        if (chatValue) await saveSecret("deepseek", chatValue);
+        if (embedValue) await saveSecret("dashscope", embedValue);
+      } catch (error) {
+        showError(`保存失败：${error.message}`);
+        if (button) {
+          button.disabled = false;
+          button.textContent = "保存并继续";
+        }
+        return;
+      }
+
+      state.setupTested = false;
+      if (!setupKeysConfigured()) {
+        showError("Key 尚未配置完整，请检查。");
+        if (button) {
+          button.disabled = false;
+          button.textContent = "保存并继续";
+        }
+        return;
+      }
       state.setupStep = 2;
       renderSetup();
     });
@@ -440,72 +524,10 @@ function renderSetup() {
     return;
   }
 
-  if (step === 2 || step === 3) {
-    const provider = step === 2 ? "deepseek" : "dashscope";
-    const label = providerLabel(provider);
-    const configured = state.keys[provider].configured;
-    card.innerHTML = `
-      ${setupProgress(step)}
-      <span class="eyebrow">STEP ${step}</span>
-      <h2>配置 ${label} Key</h2>
-      <p class="setup-lead">${provider === "deepseek"
-        ? "用于调用 deepseek-v4-flash 生成回答。"
-        : "用于调用 text-embedding-v4 生成 1024 维向量；上传和检索都需要它。"}</p>
-      ${configured ? `<div class="setup-existing">已配置：<code>${escapeHtml(state.keys[provider].masked)}</code>，留空则保留当前 Key。</div>` : ""}
-      <label class="setup-field" for="setupKeyInput">${label} API Key
-        <input id="setupKeyInput" type="password" autocomplete="off" spellcheck="false" placeholder="粘贴 ${label} API Key">
-      </label>
-      <div class="setup-error" id="setupError" hidden></div>
-      <div class="setup-actions">
-        <button class="soft-button" id="setupBack" type="button">上一步</button>
-        <button class="primary-button" id="setupNext" type="button">保存并继续</button>
-      </div>`;
-    $("#setupBack").addEventListener("click", () => {
-      state.setupStep -= 1;
-      renderSetup();
-    });
-    $("#setupNext").addEventListener("click", async () => {
-      const input = $("#setupKeyInput");
-      const value = input ? input.value.trim() : "";
-      const button = $("#setupNext");
-      if (!value && !state.keys[provider].configured) {
-        const error = $("#setupError");
-        if (error) {
-          error.textContent = "请填写 Key，或点击“跳过，先只读浏览”。";
-          error.hidden = false;
-        }
-        return;
-      }
-      if (value) {
-        if (button) {
-          button.disabled = true;
-          button.textContent = "保存中…";
-        }
-        try {
-          await saveSecret(provider, value);
-        } catch (error) {
-          const box = $("#setupError");
-          if (box) {
-            box.textContent = `保存失败：${error.message}`;
-            box.hidden = false;
-          }
-          if (button) {
-            button.disabled = false;
-            button.textContent = "保存并继续";
-          }
-          return;
-        }
-      }
-      state.setupStep += 1;
-      renderSetup();
-    });
-    return;
-  }
-
-  const ready = bothKeysConfigured();
+  const ready = setupKeysConfigured();
   card.innerHTML = `
-    ${setupProgress(4)}
-    <span class="eyebrow">STEP 4</span>
+    ${setupProgress(2)}
+    <span class="eyebrow">STEP 2</span>
     <h2>测试连接</h2>
     <p class="setup-lead">保存前先确认两个 Key 都能连通。测试由服务端发起，浏览器不会接触完整 Key。</p>
     <div class="setup-test-list">
@@ -520,7 +542,7 @@ function renderSetup() {
     </div>
     <button class="setup-skip-link" id="setupSkip" type="button">先跳过，稍后配置</button>`;
   $("#setupBack").addEventListener("click", () => {
-    state.setupStep = 3;
+    state.setupStep = 1;
     renderSetup();
   });
   $("#setupTest").addEventListener("click", async () => {
@@ -549,7 +571,7 @@ function renderSetup() {
     }
   });
   $("#setupFinish").addEventListener("click", async () => {
-    if (!bothKeysConfigured()) {
+    if (!setupKeysConfigured()) {
       showToast("还有 Key 未配置，可先跳过", "error");
       return;
     }
@@ -605,7 +627,7 @@ function renderConversation() {
     const totalChunks = activeDocs.reduce((sum, doc) => sum + (Number(doc.chunks) || 0), 0);
     messagesEl.innerHTML = `
       <div class="empty-state">
-        <img class="empty-illustration" src="/static/assets/hero-books.jpg" alt="打开的书本通向知识天空">
+        <img class="empty-logo" src="/static/assets/logo-mark.svg" alt="RAG 知识库">
         <h3>从你的知识库开始提问</h3>
         <p>已索引 ${activeDocs.length} 份文档、${formatNumber(totalChunks)} 个文本片段。回答会带上引用，点击 [n] 可以展开原文核对。</p>
       </div>`;
