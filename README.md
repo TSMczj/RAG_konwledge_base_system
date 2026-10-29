@@ -206,6 +206,7 @@ RAG_konwledge_base_system/
 - **V2 · 会话持久化**：SQLite 保存历史，重启后可继续追问。
 - **V2 · 任务可靠性**：job 持久化、取消、失败重试与断点。
 - **V2 · 工程规范**：统一错误结构 / `X-Request-ID`，稳定 `document_id`。
+- **V2 · 文档与协作规范**：docs-only 重构（英文路径、`CONTRIBUTING` / `CHANGELOG` / ADR / testing / operations），保留文档地图与单一事实源。
 - **V2 · 服务器化**：登录、租户隔离、每用户密钥库。
 
 ---
